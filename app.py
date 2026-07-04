@@ -1,6 +1,6 @@
 import os
 import json
-from flask import Flask, render_template, request, jsonify
+from flask import Flask, render_template, request, jsonify, send_from_directory
 from mistralai.client import Mistral
 from dotenv import load_dotenv
 import tools_web as tools
@@ -209,6 +209,12 @@ def traiter():
 @app.route("/")
 def index():
     return render_template("index.html")
+
+
+@app.route("/sw.js")
+def service_worker():
+    # Servi depuis la racine pour que son scope couvre tout le site.
+    return send_from_directory("static", "sw.js", mimetype="application/javascript")
 
 
 @app.route("/api/chat", methods=["POST"])

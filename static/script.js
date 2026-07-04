@@ -336,3 +336,12 @@ visionneuse.addEventListener("click", (e) => { if (e.target === visionneuse) fer
 document.addEventListener("keydown", (e) => { if (e.key === "Escape") fermerVisionneuse(); });
 
 chargerFil();
+
+/* ===== PWA : enregistrement du service worker ===== */
+if ("serviceWorker" in navigator) {
+  window.addEventListener("load", () => {
+    navigator.serviceWorker.register("/sw.js").catch((e) =>
+      console.warn("Service worker non enregistré :", e)
+    );
+  });
+}
