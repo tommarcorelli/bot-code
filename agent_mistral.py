@@ -1,8 +1,12 @@
-from mistralai.client import Mistral
-import tools
+import os
 import json
+from mistralai.client import Mistral
+from dotenv import load_dotenv
+import tools
 
-client = Mistral(api_key="JN863xwdzUv0chAG0nYHTlpvkLFsMu95")
+load_dotenv()
+
+client = Mistral(api_key=os.getenv("MISTRAL_API_KEY"))
 
 MODEL = "devstral-latest"
 

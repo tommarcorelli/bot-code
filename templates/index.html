@@ -89,6 +89,18 @@
     border-radius: 999px;
     background: rgba(255,255,255,0.03);
   }
+  #nouvelle {
+    display: flex; align-items: center; gap: 4px;
+    padding: 7px 14px;
+    font-family: inherit; font-size: 12.5px; font-weight: 600;
+    color: var(--text);
+    background: rgba(255,255,255,0.04);
+    border: 1px solid var(--border);
+    border-radius: 999px;
+    cursor: pointer;
+    transition: background 0.2s, border-color 0.2s;
+  }
+  #nouvelle:hover { background: rgba(124,92,255,0.18); border-color: rgba(124,92,255,0.5); }
   .statut .dot {
     width: 8px; height: 8px; border-radius: 50%;
     background: #22c55e;
@@ -306,6 +318,7 @@
     <span class="s">Devstral · function calling</span>
   </div>
   <div class="statut"><span class="dot"></span> En ligne</div>
+  <button id="nouvelle" title="Nouvelle conversation">＋ Nouvelle</button>
 </header>
 
 <div id="chat">
@@ -526,6 +539,28 @@ function autoTaille() {
   input.style.height = Math.min(input.scrollHeight, 160) + "px";
 }
 
+// Recharge la conversation sauvegardée côté serveur au chargement de la page.
+async function chargerFil() {
+  try {
+    const res = await fetch("/api/historique");
+    const data = await res.json();
+    if (!data.messages || !data.messages.length) return;
+    data.messages.forEach((m) => {
+      if (m.role === "user") messageUtilisateur(m.content);
+      else messageAgent(m.content);
+    });
+  } catch (e) { /* pas d'historique, on reste sur l'accueil */ }
+}
+
+async function nouvelleConversation() {
+  if (!confirm("Démarrer une nouvelle conversation ? L'historique actuel sera effacé.")) return;
+  await fetch("/api/nouvelle", { method: "POST" });
+  chatDiv.innerHTML = '<div class="vide" id="accueil">' +
+    '<h2>👋 Nouvelle conversation</h2>' +
+    '<p>Demande-moi de lire, écrire ou exécuter du code. Les actions sensibles te seront soumises pour confirmation.</p></div>';
+  input.focus();
+}
+
 input.addEventListener("input", autoTaille);
 input.addEventListener("keydown", (e) => {
   if (e.key === "Enter" && !e.shiftKey) {
@@ -534,6 +569,9 @@ input.addEventListener("keydown", (e) => {
   }
 });
 boutonEnvoyer.addEventListener("click", envoyer);
+document.getElementById("nouvelle").addEventListener("click", nouvelleConversation);
+
+chargerFil();
 </script>
 
 </body>

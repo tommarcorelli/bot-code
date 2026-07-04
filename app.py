@@ -86,6 +86,62 @@ historique = []
 en_attente = None
 
 
+def message_vers_dict(message):
+    """Convertit un message Mistral (objet) en dict JSON-sérialisable."""
+    d = {"role": message.role, "content": message.content}
+    if getattr(message, "tool_calls", None):
+        d["tool_calls"] = [
+            {
+                "id": tc.id,
+                "type": "function",
+                "function": {
+                    "name": tc.function.name,
+                    "arguments": tc.function.arguments,
+                },
+            }
+            for tc in message.tool_calls
+        ]
+    return d
+
+
+def sauvegarder_historique():
+    """Écrit la conversation sur disque (best-effort)."""
+    try:
+        with open(FICHIER_HISTORIQUE, "w", encoding="utf-8") as f:
+            json.dump(historique, f, ensure_ascii=False, indent=2)
+    except Exception as e:
+        print(f"[persistance] Échec sauvegarde : {e}")
+
+
+def nettoyer_historique():
+    """Retire une éventuelle séquence de tool_calls incomplète en fin
+    d'historique (ex. serveur arrêté pendant une confirmation en attente)."""
+    while historique:
+        dernier = historique[-1]
+        if dernier.get("role") == "tool":
+            historique.pop()
+            continue
+        if dernier.get("role") == "assistant" and dernier.get("tool_calls"):
+            historique.pop()
+            continue
+        break
+
+
+def charger_historique():
+    """Recharge la conversation depuis le disque au démarrage."""
+    global historique
+    if not os.path.exists(FICHIER_HISTORIQUE):
+        return
+    try:
+        with open(FICHIER_HISTORIQUE, "r", encoding="utf-8") as f:
+            historique = json.load(f)
+        nettoyer_historique()
+        print(f"[persistance] {len(historique)} messages rechargés.")
+    except Exception as e:
+        print(f"[persistance] Échec chargement : {e}")
+        historique = []
+
+
 def demander_a_lia(messages):
     response = client.chat.complete(
         model=MODEL,
@@ -119,9 +175,9 @@ def traiter():
         if en_attente is None:
             message = demander_a_lia(historique)
             if not message.tool_calls:
-                historique.append(message)
+                historique.append(message_vers_dict(message))
                 return {"type": "reponse", "reponse": message.content}
-            historique.append(message)
+            historique.append(message_vers_dict(message))
             en_attente = {"tool_calls": message.tool_calls, "index": 0}
 
         # Traiter les tool_calls du message courant, un par un.
@@ -155,9 +211,11 @@ def api_chat():
     message_utilisateur = request.json.get("message", "")
     historique.append({"role": "user", "content": message_utilisateur})
     try:
-        return jsonify(traiter())
+        resultat = traiter()
     except Exception as e:
-        return jsonify({"type": "reponse", "reponse": f"Erreur : {e}"})
+        resultat = {"type": "reponse", "reponse": f"Erreur : {e}"}
+    sauvegarder_historique()
+    return jsonify(resultat)
 
 
 @app.route("/api/confirmer", methods=["POST"])
@@ -180,11 +238,39 @@ def api_confirmer():
                 "tool_call_id": tool_call.id,
             })
         en_attente["index"] += 1
-        return jsonify(traiter())
+        resultat = traiter()
     except Exception as e:
         en_attente = None
-        return jsonify({"type": "reponse", "reponse": f"Erreur : {e}"})
+        resultat = {"type": "reponse", "reponse": f"Erreur : {e}"}
+    sauvegarder_historique()
+    return jsonify(resultat)
 
+
+@app.route("/api/historique")
+def api_historique():
+    """Renvoie les messages affichables (demandes utilisateur + réponses
+    texte de l'agent), pour reconstruire le fil au chargement de la page."""
+    messages = []
+    for m in historique:
+        role = m.get("role")
+        if role == "user":
+            messages.append({"role": "user", "content": m.get("content", "")})
+        elif role == "assistant" and not m.get("tool_calls") and m.get("content"):
+            messages.append({"role": "agent", "content": m.get("content", "")})
+    return jsonify({"messages": messages})
+
+
+@app.route("/api/nouvelle", methods=["POST"])
+def api_nouvelle():
+    """Vide la conversation en cours."""
+    global historique, en_attente
+    historique = []
+    en_attente = None
+    sauvegarder_historique()
+    return jsonify({"ok": True})
+
+
+charger_historique()
 
 if __name__ == "__main__":
     app.run(debug=True, port=5000)
