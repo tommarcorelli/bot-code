@@ -1,0 +1,540 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Devstral · Agent de Code</title>
+
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/atom-one-dark.min.css">
+
+<style>
+  :root {
+    --bg: #0a0b12;
+    --panel: rgba(22, 25, 37, 0.65);
+    --border: rgba(255, 255, 255, 0.08);
+    --text: #e7e9f0;
+    --muted: #8b90a5;
+    --accent: #7c5cff;
+    --accent2: #22d3ee;
+    --user: linear-gradient(135deg, #6d5cff, #8b5cf6);
+    --radius: 16px;
+  }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; }
+  body {
+    margin: 0;
+    font-family: 'Inter', 'Segoe UI', sans-serif;
+    color: var(--text);
+    background: var(--bg);
+    height: 100vh;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+  }
+
+  /* Fond aurora animé */
+  .aurora {
+    position: fixed;
+    inset: 0;
+    z-index: -1;
+    overflow: hidden;
+    filter: blur(80px);
+    opacity: 0.55;
+  }
+  .aurora span {
+    position: absolute;
+    display: block;
+    width: 45vw;
+    height: 45vw;
+    border-radius: 50%;
+    mix-blend-mode: screen;
+  }
+  .aurora .a1 { background: #7c5cff; top: -10%; left: -5%; animation: drift1 18s ease-in-out infinite; }
+  .aurora .a2 { background: #22d3ee; bottom: -15%; right: -5%; animation: drift2 22s ease-in-out infinite; }
+  .aurora .a3 { background: #db2777; top: 30%; left: 40%; animation: drift3 26s ease-in-out infinite; }
+  @keyframes drift1 { 0%,100%{transform:translate(0,0)} 50%{transform:translate(8vw,6vh)} }
+  @keyframes drift2 { 0%,100%{transform:translate(0,0)} 50%{transform:translate(-7vw,-5vh)} }
+  @keyframes drift3 { 0%,100%{transform:translate(0,0)} 50%{transform:translate(-5vw,4vh) scale(1.1)} }
+
+  /* Header */
+  header {
+    padding: 16px 26px;
+    background: var(--panel);
+    backdrop-filter: blur(20px);
+    border-bottom: 1px solid var(--border);
+    display: flex;
+    align-items: center;
+    gap: 14px;
+  }
+  .logo {
+    width: 38px; height: 38px;
+    border-radius: 11px;
+    display: grid; place-items: center;
+    background: linear-gradient(135deg, var(--accent), var(--accent2));
+    box-shadow: 0 6px 20px rgba(124, 92, 255, 0.45);
+    font-size: 20px;
+  }
+  .titre-zone { display: flex; flex-direction: column; line-height: 1.2; }
+  .titre-zone .t { font-weight: 700; font-size: 16px; letter-spacing: 0.2px; }
+  .titre-zone .s { font-size: 12px; color: var(--muted); }
+  .statut {
+    margin-left: auto;
+    display: flex; align-items: center; gap: 8px;
+    font-size: 12px; color: var(--muted);
+    padding: 6px 12px;
+    border: 1px solid var(--border);
+    border-radius: 999px;
+    background: rgba(255,255,255,0.03);
+  }
+  .statut .dot {
+    width: 8px; height: 8px; border-radius: 50%;
+    background: #22c55e;
+    box-shadow: 0 0 0 0 rgba(34,197,94,0.6);
+    animation: pulse 2s infinite;
+  }
+  @keyframes pulse {
+    0% { box-shadow: 0 0 0 0 rgba(34,197,94,0.5); }
+    70% { box-shadow: 0 0 0 8px rgba(34,197,94,0); }
+    100% { box-shadow: 0 0 0 0 rgba(34,197,94,0); }
+  }
+
+  /* Chat */
+  #chat {
+    flex: 1;
+    overflow-y: auto;
+    padding: 28px max(24px, calc(50vw - 420px));
+    display: flex;
+    flex-direction: column;
+    gap: 22px;
+    scroll-behavior: smooth;
+  }
+  #chat::-webkit-scrollbar { width: 10px; }
+  #chat::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.08); border-radius: 10px; }
+
+  .rangee { display: flex; gap: 12px; align-items: flex-start; animation: apparait 0.35s ease; }
+  .rangee.moi { flex-direction: row-reverse; }
+  @keyframes apparait { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
+
+  .avatar {
+    width: 34px; height: 34px; flex: none;
+    border-radius: 10px;
+    display: grid; place-items: center;
+    font-size: 16px; font-weight: 700;
+  }
+  .avatar.ia { background: linear-gradient(135deg, var(--accent), var(--accent2)); }
+  .avatar.moi { background: linear-gradient(135deg, #334155, #475569); }
+
+  .bulle {
+    max-width: 78%;
+    padding: 13px 16px;
+    border-radius: var(--radius);
+    line-height: 1.6;
+    font-size: 14.5px;
+    border: 1px solid var(--border);
+  }
+  .rangee.moi .bulle {
+    background: var(--user);
+    border: none;
+    border-bottom-right-radius: 5px;
+    color: white;
+    white-space: pre-wrap;
+    box-shadow: 0 8px 24px rgba(109, 92, 255, 0.3);
+  }
+  .rangee.ia .bulle {
+    background: var(--panel);
+    backdrop-filter: blur(12px);
+    border-bottom-left-radius: 5px;
+  }
+
+  /* Rendu markdown */
+  .bulle p { margin: 0 0 10px; }
+  .bulle p:last-child { margin-bottom: 0; }
+  .bulle ul, .bulle ol { margin: 0 0 10px; padding-left: 22px; }
+  .bulle a { color: var(--accent2); }
+  .bulle code:not(pre code) {
+    background: rgba(124, 92, 255, 0.16);
+    color: #c9b8ff;
+    padding: 2px 6px;
+    border-radius: 5px;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 0.88em;
+  }
+  .bloc-code {
+    position: relative;
+    margin: 10px 0;
+    border-radius: 10px;
+    overflow: hidden;
+    border: 1px solid var(--border);
+  }
+  .bloc-code pre { margin: 0; }
+  .bloc-code pre code {
+    display: block;
+    padding: 14px 16px;
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 13px;
+    line-height: 1.55;
+    overflow-x: auto;
+    background: #0d1017 !important;
+  }
+  .bloc-code .copier {
+    position: absolute; top: 8px; right: 8px;
+    padding: 4px 10px;
+    font-size: 11px; font-weight: 600;
+    color: var(--muted);
+    background: rgba(255,255,255,0.06);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    cursor: pointer;
+    opacity: 0; transition: opacity 0.2s, color 0.2s;
+  }
+  .bloc-code:hover .copier { opacity: 1; }
+  .bloc-code .copier:hover { color: var(--text); }
+
+  /* Indicateur de frappe */
+  .frappe { display: inline-flex; gap: 5px; padding: 4px 2px; }
+  .frappe span {
+    width: 8px; height: 8px; border-radius: 50%;
+    background: var(--accent);
+    animation: rebond 1.2s infinite ease-in-out;
+  }
+  .frappe span:nth-child(2) { animation-delay: 0.15s; }
+  .frappe span:nth-child(3) { animation-delay: 0.3s; }
+  @keyframes rebond { 0%,60%,100%{ transform: translateY(0); opacity:0.5 } 30%{ transform: translateY(-6px); opacity:1 } }
+
+  /* Carte de confirmation */
+  .confirmation {
+    max-width: 78%;
+    background: linear-gradient(180deg, rgba(124,92,255,0.12), rgba(34,211,238,0.06));
+    border: 1px solid rgba(124, 92, 255, 0.4);
+    border-radius: var(--radius);
+    border-bottom-left-radius: 5px;
+    padding: 16px;
+    box-shadow: 0 10px 30px rgba(0,0,0,0.35);
+  }
+  .confirmation .titre {
+    font-weight: 700; font-size: 14px;
+    display: flex; align-items: center; gap: 8px;
+    margin-bottom: 12px;
+  }
+  .confirmation .badge {
+    font-size: 11px; font-weight: 600;
+    padding: 3px 9px; border-radius: 999px;
+    background: rgba(240, 180, 41, 0.15);
+    color: #f0b429; border: 1px solid rgba(240,180,41,0.3);
+  }
+  .confirmation .cible {
+    font-family: 'JetBrains Mono', monospace;
+    font-size: 13px; color: var(--accent2);
+    margin-bottom: 10px; word-break: break-all;
+  }
+  .confirmation .bloc-code { margin-top: 0; margin-bottom: 14px; }
+  .confirmation .boutons { display: flex; gap: 10px; }
+  .confirmation button {
+    flex: 1;
+    padding: 10px 16px;
+    border-radius: 10px; border: none;
+    cursor: pointer; font-weight: 700; font-size: 13.5px;
+    font-family: inherit;
+    transition: transform 0.12s, filter 0.2s;
+  }
+  .confirmation button:hover { filter: brightness(1.1); }
+  .confirmation button:active { transform: scale(0.97); }
+  .confirmation .oui { background: linear-gradient(135deg, #22c55e, #16a34a); color: #04210f; }
+  .confirmation .non { background: rgba(255,255,255,0.06); color: #f87171; border: 1px solid rgba(248,113,113,0.3); }
+  .confirmation button:disabled { opacity: 0.45; cursor: default; filter: none; transform: none; }
+  .confirmation .verdict { margin-top: 10px; font-size: 12.5px; color: var(--muted); font-weight: 600; }
+
+  /* Zone de saisie */
+  #input-zone {
+    padding: 16px max(24px, calc(50vw - 420px)) 22px;
+    background: var(--panel);
+    backdrop-filter: blur(20px);
+    border-top: 1px solid var(--border);
+  }
+  .saisie {
+    display: flex; align-items: flex-end; gap: 10px;
+    background: rgba(13, 16, 23, 0.85);
+    border: 1px solid var(--border);
+    border-radius: 16px;
+    padding: 8px 8px 8px 16px;
+    transition: border-color 0.2s, box-shadow 0.2s;
+  }
+  .saisie:focus-within {
+    border-color: rgba(124,92,255,0.6);
+    box-shadow: 0 0 0 4px rgba(124,92,255,0.12);
+  }
+  #message {
+    flex: 1;
+    background: transparent; border: none; outline: none;
+    color: var(--text);
+    font-family: inherit; font-size: 15px;
+    line-height: 1.5;
+    resize: none;
+    max-height: 160px;
+    padding: 8px 0;
+  }
+  #message::placeholder { color: var(--muted); }
+  #envoyer {
+    width: 40px; height: 40px; flex: none;
+    border: none; border-radius: 12px; cursor: pointer;
+    background: linear-gradient(135deg, var(--accent), var(--accent2));
+    color: white; font-size: 18px;
+    display: grid; place-items: center;
+    transition: transform 0.12s, filter 0.2s;
+  }
+  #envoyer:hover { filter: brightness(1.1); }
+  #envoyer:active { transform: scale(0.92); }
+  .astuce { text-align: center; font-size: 11px; color: var(--muted); margin-top: 8px; }
+
+  .vide {
+    margin: auto; text-align: center; color: var(--muted); max-width: 400px;
+  }
+  .vide h2 { color: var(--text); font-weight: 700; margin: 0 0 8px; }
+</style>
+</head>
+<body>
+
+<div class="aurora"><span class="a1"></span><span class="a2"></span><span class="a3"></span></div>
+
+<header>
+  <div class="logo">🤖</div>
+  <div class="titre-zone">
+    <span class="t">Agent de Code</span>
+    <span class="s">Devstral · function calling</span>
+  </div>
+  <div class="statut"><span class="dot"></span> En ligne</div>
+</header>
+
+<div id="chat">
+  <div class="vide" id="accueil">
+    <h2>👋 Prêt à coder</h2>
+    <p>Demande-moi de lire, écrire ou exécuter du code. Les actions sensibles te seront soumises pour confirmation.</p>
+  </div>
+</div>
+
+<div id="input-zone">
+  <div class="saisie">
+    <textarea id="message" rows="1" placeholder="Écris ta demande…  (Entrée pour envoyer, Maj+Entrée = nouvelle ligne)" autofocus></textarea>
+    <button id="envoyer" title="Envoyer">➤</button>
+  </div>
+  <div class="astuce">Devstral peut faire des erreurs — vérifie les actions avant de confirmer.</div>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/dompurify@3/dist/purify.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
+<script>
+const chatDiv = document.getElementById("chat");
+const input = document.getElementById("message");
+const boutonEnvoyer = document.getElementById("envoyer");
+
+marked.setOptions({ breaks: true });
+
+function scrollBas() { chatDiv.scrollTop = chatDiv.scrollHeight; }
+
+function retirerAccueil() {
+  const a = document.getElementById("accueil");
+  if (a) a.remove();
+}
+
+// Crée une rangée avatar + bulle. Retourne l'élément .bulle.
+function creerRangee(classe, avatarTxt) {
+  retirerAccueil();
+  const rangee = document.createElement("div");
+  rangee.className = "rangee " + classe;
+  const avatar = document.createElement("div");
+  avatar.className = "avatar " + classe;
+  avatar.textContent = avatarTxt;
+  const bulle = document.createElement("div");
+  bulle.className = "bulle";
+  rangee.appendChild(avatar);
+  rangee.appendChild(bulle);
+  chatDiv.appendChild(rangee);
+  scrollBas();
+  return bulle;
+}
+
+function messageUtilisateur(texte) {
+  const bulle = creerRangee("moi", "🧑");
+  bulle.textContent = texte;
+}
+
+// Rendu markdown + coloration + boutons copier.
+function messageAgent(texte) {
+  const bulle = creerRangee("ia", "🤖");
+  bulle.innerHTML = DOMPurify.sanitize(marked.parse(texte || ""));
+  embellirCode(bulle);
+  scrollBas();
+  return bulle;
+}
+
+function embellirCode(conteneur) {
+  conteneur.querySelectorAll("pre code").forEach((code) => {
+    hljs.highlightElement(code);
+    const pre = code.parentElement;
+    if (pre.parentElement.classList.contains("bloc-code")) return;
+    const wrap = document.createElement("div");
+    wrap.className = "bloc-code";
+    pre.parentNode.insertBefore(wrap, pre);
+    wrap.appendChild(pre);
+    const btn = document.createElement("button");
+    btn.className = "copier";
+    btn.textContent = "Copier";
+    btn.onclick = () => {
+      navigator.clipboard.writeText(code.innerText);
+      btn.textContent = "Copié ✓";
+      setTimeout(() => (btn.textContent = "Copier"), 1400);
+    };
+    wrap.appendChild(btn);
+  });
+}
+
+// Indicateur de frappe animé, retourne la rangée à retirer ensuite.
+function afficherFrappe() {
+  const bulle = creerRangee("ia", "🤖");
+  bulle.innerHTML = '<div class="frappe"><span></span><span></span><span></span></div>';
+  return bulle.closest(".rangee");
+}
+
+function gererReponse(data) {
+  if (data.type === "confirmation") {
+    afficherConfirmation(data);
+  } else {
+    messageAgent(data.reponse);
+  }
+}
+
+function afficherConfirmation(data) {
+  retirerAccueil();
+  const rangee = document.createElement("div");
+  rangee.className = "rangee ia";
+  const avatar = document.createElement("div");
+  avatar.className = "avatar ia";
+  avatar.textContent = "🤖";
+  rangee.appendChild(avatar);
+
+  const carte = document.createElement("div");
+  carte.className = "confirmation";
+
+  const estCommande = data.outil === "executer_commande";
+  const corps = estCommande ? data.arguments.commande : data.arguments.contenu;
+  const langue = estCommande ? "bash" : devinerLangue(data.arguments.chemin);
+
+  const titre = document.createElement("div");
+  titre.className = "titre";
+  titre.innerHTML = `<span class="badge">CONFIRMATION</span> ` +
+    (estCommande ? "Exécuter une commande ?" : "Écrire un fichier ?");
+  carte.appendChild(titre);
+
+  if (!estCommande) {
+    const cible = document.createElement("div");
+    cible.className = "cible";
+    cible.textContent = "📄 " + data.arguments.chemin;
+    carte.appendChild(cible);
+  }
+
+  const wrap = document.createElement("div");
+  wrap.className = "bloc-code";
+  const pre = document.createElement("pre");
+  const code = document.createElement("code");
+  code.className = "language-" + langue;
+  code.textContent = corps || "";
+  pre.appendChild(code);
+  wrap.appendChild(pre);
+  carte.appendChild(wrap);
+  hljs.highlightElement(code);
+
+  const boutons = document.createElement("div");
+  boutons.className = "boutons";
+  const btnOui = document.createElement("button");
+  btnOui.className = "oui";
+  btnOui.textContent = "✓ Confirmer";
+  const btnNon = document.createElement("button");
+  btnNon.className = "non";
+  btnNon.textContent = "✕ Annuler";
+  boutons.appendChild(btnNon);
+  boutons.appendChild(btnOui);
+  carte.appendChild(boutons);
+
+  btnOui.onclick = () => repondreConfirmation("oui", carte);
+  btnNon.onclick = () => repondreConfirmation("non", carte);
+
+  rangee.appendChild(carte);
+  chatDiv.appendChild(rangee);
+  scrollBas();
+}
+
+function devinerLangue(chemin) {
+  const ext = (chemin || "").split(".").pop().toLowerCase();
+  const map = { py: "python", js: "javascript", ts: "typescript", html: "html",
+    css: "css", json: "json", md: "markdown", sh: "bash", txt: "plaintext",
+    yml: "yaml", yaml: "yaml", sql: "sql", java: "java", c: "c", cpp: "cpp" };
+  return map[ext] || "plaintext";
+}
+
+async function repondreConfirmation(decision, carte) {
+  carte.querySelectorAll("button").forEach((b) => (b.disabled = true));
+  const verdict = document.createElement("div");
+  verdict.className = "verdict";
+  verdict.textContent = decision === "oui" ? "→ Action confirmée" : "→ Action annulée";
+  carte.appendChild(verdict);
+
+  const frappe = afficherFrappe();
+  try {
+    const res = await fetch("/api/confirmer", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ decision })
+    });
+    const data = await res.json();
+    frappe.remove();
+    gererReponse(data);
+  } catch (e) {
+    frappe.remove();
+    messageAgent("⚠️ Erreur de connexion au serveur.");
+  }
+}
+
+async function envoyer() {
+  const texte = input.value.trim();
+  if (!texte) return;
+  messageUtilisateur(texte);
+  input.value = "";
+  autoTaille();
+
+  const frappe = afficherFrappe();
+  try {
+    const res = await fetch("/api/chat", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ message: texte })
+    });
+    const data = await res.json();
+    frappe.remove();
+    gererReponse(data);
+  } catch (e) {
+    frappe.remove();
+    messageAgent("⚠️ Erreur de connexion au serveur.");
+  }
+}
+
+function autoTaille() {
+  input.style.height = "auto";
+  input.style.height = Math.min(input.scrollHeight, 160) + "px";
+}
+
+input.addEventListener("input", autoTaille);
+input.addEventListener("keydown", (e) => {
+  if (e.key === "Enter" && !e.shiftKey) {
+    e.preventDefault();
+    envoyer();
+  }
+});
+boutonEnvoyer.addEventListener("click", envoyer);
+</script>
+
+</body>
+</html>
