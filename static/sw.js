@@ -1,5 +1,7 @@
 // Service worker : rend l'appli installable et met en cache le "shell".
-const CACHE = "agent-code-v1";
+// Stratégie réseau d'abord : on ne sert JAMAIS un vieux CSS/JS si le réseau
+// est disponible (le cache ne sert qu'en mode hors-ligne).
+const CACHE = "agent-code-v4";
 const SHELL = [
   "/",
   "/static/style.css",
@@ -27,12 +29,18 @@ self.addEventListener("fetch", (e) => {
   if (req.method !== "GET") return;                 // POST (/api/chat…) : jamais de cache
   const url = new URL(req.url);
   if (url.pathname.startsWith("/api/")) return;     // API : toujours le réseau
+  if (url.origin !== location.origin) return;       // CDN : laisser le navigateur gérer
 
-  // Navigation : réseau d'abord, cache en secours (mode hors-ligne).
-  if (req.mode === "navigate") {
-    e.respondWith(fetch(req).catch(() => caches.match("/")));
-    return;
-  }
-  // Autres ressources (CSS, JS, icônes) : cache d'abord.
-  e.respondWith(caches.match(req).then((cache) => cache || fetch(req)));
+  // Réseau d'abord (et mise à jour du cache), cache seulement en secours.
+  e.respondWith(
+    fetch(req)
+      .then((reponse) => {
+        const copie = reponse.clone();
+        caches.open(CACHE).then((c) => c.put(req, copie));
+        return reponse;
+      })
+      .catch(() =>
+        caches.match(req).then((cache) => cache || (req.mode === "navigate" ? caches.match("/") : undefined))
+      )
+  );
 });

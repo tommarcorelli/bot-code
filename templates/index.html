@@ -9,7 +9,7 @@
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/atom-one-dark.min.css">
-<link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+<link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}?v=4">
 
 <!-- PWA -->
 <link rel="manifest" href="{{ url_for('static', filename='manifest.json') }}">
@@ -19,21 +19,84 @@
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="apple-mobile-web-app-title" content="Agent Code">
 <link rel="apple-touch-icon" href="{{ url_for('static', filename='icon-192.png') }}">
+<link rel="icon" type="image/png" href="{{ url_for('static', filename='icon-192.png') }}">
 </head>
 <body>
 
 <div class="aurora"><span class="a1"></span><span class="a2"></span><span class="a3"></span></div>
 
 <header>
-  <button id="toggle-fichiers" title="Explorateur de fichiers">📁</button>
-  <div class="logo">🤖</div>
+  <button id="toggle-conv" title="Conversations">☰</button>
+  <div class="logo">
+    <svg viewBox="0 0 64 64" width="26" height="26" aria-hidden="true">
+      <defs>
+        <linearGradient id="lgo" x1="0" y1="0" x2="1" y2="1">
+          <stop offset="0" stop-color="#7c5cff"/><stop offset="1" stop-color="#22d3ee"/>
+        </linearGradient>
+      </defs>
+      <path d="M22 20 L10 32 L22 44" fill="none" stroke="url(#lgo)" stroke-width="6" stroke-linecap="round" stroke-linejoin="round"/>
+      <path d="M42 20 L54 32 L42 44" fill="none" stroke="url(#lgo)" stroke-width="6" stroke-linecap="round" stroke-linejoin="round"/>
+      <path d="M36 12 L27 34 L33 34 L28 52 L39 29 L33 29 Z" fill="#f0b429"/>
+    </svg>
+  </div>
   <div class="titre-zone">
     <span class="t">Agent de Code</span>
-    <span class="s">Devstral · function calling</span>
+    <span class="s">streaming · function calling</span>
   </div>
-  <div class="statut"><span class="dot"></span> En ligne</div>
-  <button id="nouvelle" title="Nouvelle conversation">＋ Nouvelle</button>
+
+  <button id="ws-btn" title="Choisir le dossier de travail">📂 <span id="ws-nom">…</span> ▾</button>
+  <select id="modele" title="Modèle"></select>
+  <button id="git-btn" title="Git : statut, diff, commit">⎇ Git</button>
+
+  <div id="tokens" title="Tokens consommés (entrée / sortie)"></div>
+  <button id="toggle-fichiers" title="Explorateur de fichiers">📁</button>
 </header>
+
+<div id="app">
+
+  <!-- Sidebar conversations -->
+  <aside id="conversations">
+    <button id="nouvelle">＋ Nouvelle conversation</button>
+    <div id="liste-conv"></div>
+  </aside>
+  <div id="voile-conv"></div>
+
+  <main>
+    <div id="chat">
+      <div class="vide" id="accueil">
+        <div class="grand-logo">
+          <svg viewBox="0 0 64 64" width="64" height="64" aria-hidden="true">
+            <defs>
+              <linearGradient id="lga" x1="0" y1="0" x2="1" y2="1">
+                <stop offset="0" stop-color="#7c5cff"/><stop offset="1" stop-color="#22d3ee"/>
+              </linearGradient>
+            </defs>
+            <path d="M22 20 L10 32 L22 44" fill="none" stroke="url(#lga)" stroke-width="6" stroke-linecap="round" stroke-linejoin="round"/>
+            <path d="M42 20 L54 32 L42 44" fill="none" stroke="url(#lga)" stroke-width="6" stroke-linecap="round" stroke-linejoin="round"/>
+            <path d="M36 12 L27 34 L33 34 L28 52 L39 29 L33 29 Z" fill="#f0b429"/>
+          </svg>
+        </div>
+        <h2>Prêt à coder</h2>
+        <p>Choisis un dossier de travail (📂 en haut), puis demande-moi de lire, écrire, chercher ou exécuter du code.</p>
+        <div class="suggestions">
+          <button class="sugg">📊 Analyse le projet et résume sa structure</button>
+          <button class="sugg">🐛 Cherche des bugs potentiels dans le code</button>
+          <button class="sugg">📝 Génère un README pour ce projet</button>
+          <button class="sugg">🧹 Propose des améliorations du code</button>
+        </div>
+      </div>
+    </div>
+
+    <div id="input-zone">
+      <div class="saisie">
+        <textarea id="message" rows="1" placeholder="Écris ta demande…  (Entrée pour envoyer, Maj+Entrée = nouvelle ligne)" autofocus></textarea>
+        <button id="envoyer" title="Envoyer">➤</button>
+      </div>
+      <div class="astuce">L'agent peut faire des erreurs — vérifie les actions avant de confirmer. Les modifs sont annulables (↩).</div>
+    </div>
+  </main>
+
+</div>
 
 <!-- Explorateur de fichiers (drawer) -->
 <aside id="explorateur">
@@ -45,39 +108,70 @@
 </aside>
 <div id="voile-exp"></div>
 
-<!-- Visionneuse de fichier -->
-<div id="visionneuse">
-  <div class="v-fenetre">
-    <div class="v-entete">
+<!-- Visionneuse / éditeur de fichier -->
+<div id="visionneuse" class="modal">
+  <div class="m-fenetre">
+    <div class="m-entete">
       <span class="v-titre">fichier</span>
-      <div class="v-actions">
+      <div class="m-actions">
+        <button class="v-modifier" title="Modifier le fichier">Modifier</button>
+        <button class="v-enregistrer" title="Enregistrer">💾 Enregistrer</button>
         <button class="v-copier" title="Copier">Copier</button>
-        <button class="v-fermer" title="Fermer">✕</button>
+        <button class="m-fermer" title="Fermer">✕</button>
       </div>
     </div>
-    <div class="v-corps"></div>
+    <div class="v-corps m-corps"></div>
   </div>
 </div>
 
-<div id="chat">
-  <div class="vide" id="accueil">
-    <h2>👋 Prêt à coder</h2>
-    <p>Demande-moi de lire, écrire ou exécuter du code. Les actions sensibles te seront soumises pour confirmation.</p>
+<!-- Sélecteur de dossier de travail -->
+<div id="modal-dossier" class="modal">
+  <div class="m-fenetre etroite">
+    <div class="m-entete">
+      <span>📂 Dossier de travail</span>
+      <div class="m-actions"><button class="m-fermer">✕</button></div>
+    </div>
+    <div id="d-chemin">…</div>
+    <div id="d-liste" class="m-corps"></div>
+    <div class="m-pied">
+      <button id="d-choisir">✓ Travailler dans ce dossier</button>
+    </div>
   </div>
 </div>
 
-<div id="input-zone">
-  <div class="saisie">
-    <textarea id="message" rows="1" placeholder="Écris ta demande…  (Entrée pour envoyer, Maj+Entrée = nouvelle ligne)" autofocus></textarea>
-    <button id="envoyer" title="Envoyer">➤</button>
+<!-- Panneau Git -->
+<div id="modal-git" class="modal">
+  <div class="m-fenetre">
+    <div class="m-entete">
+      <span>⎇ Git · <span id="g-branche">…</span></span>
+      <div class="m-actions">
+        <button id="g-rafraichir" title="Rafraîchir">⟳</button>
+        <button class="m-fermer">✕</button>
+      </div>
+    </div>
+    <div class="m-corps">
+      <div id="g-non-repo" style="display:none">
+        <p>Ce dossier n'est pas un dépôt Git.</p>
+        <button id="g-init">Initialiser (git init)</button>
+      </div>
+      <div id="g-contenu">
+        <div id="g-fichiers"></div>
+        <div id="g-diff"></div>
+      </div>
+    </div>
+    <div class="m-pied" id="g-pied">
+      <input id="g-message" placeholder="Message de commit…">
+      <button id="g-commit">✓ Commit</button>
+    </div>
   </div>
-  <div class="astuce">Devstral peut faire des erreurs — vérifie les actions avant de confirmer.</div>
 </div>
+
+<div id="toast"></div>
 
 <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/dompurify@3/dist/purify.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
-<script src="{{ url_for('static', filename='script.js') }}"></script>
+<script src="{{ url_for('static', filename='script.js') }}?v=4"></script>
 
 </body>
 </html>

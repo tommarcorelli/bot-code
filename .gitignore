@@ -3,3 +3,7 @@ venv/
 __pycache__/
 *.pyc
 conversations.json
+conversations.json.ancien
+conversations/
+sauvegardes/
+config.json

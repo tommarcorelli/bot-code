@@ -1,7 +1,14 @@
 import os
 import json
-from flask import Flask, render_template, request, jsonify, send_from_directory
+import time
+import uuid
+import shutil
+import difflib
+import subprocess
+import urllib.request
+from flask import Flask, render_template, request, jsonify, send_from_directory, Response
 from mistralai.client import Mistral
+from openai import OpenAI
 from dotenv import load_dotenv
 import tools_web as tools
 
@@ -10,18 +17,67 @@ load_dotenv()
 app = Flask(__name__)
 
 client = Mistral(api_key=os.getenv("MISTRAL_API_KEY"))
-MODEL = "devstral-latest"
 
-# Fichier de persistance de la conversation.
-FICHIER_HISTORIQUE = "conversations.json"
+# Groq : API compatible OpenAI (function calling gratuit et rapide).
+# Le client n'existe que si une clé est présente dans le .env.
+GROQ_API_KEY = os.getenv("GROQ_API_KEY", "").strip()
+groq_client = (OpenAI(base_url="https://api.groq.com/openai/v1", api_key=GROQ_API_KEY)
+               if GROQ_API_KEY else None)
 
-# Racine de l'explorateur de fichiers : on ne sort jamais de ce dossier.
+# Racine de l'application (fallback du dossier de travail).
 BASE_DIR = os.path.abspath(os.path.dirname(__file__))
+# Un fichier JSON par conversation.
+CONV_DIR = os.path.join(BASE_DIR, "conversations")
+# Sauvegardes des fichiers avant modification (pour l'annulation).
+SAUV_DIR = os.path.join(BASE_DIR, "sauvegardes")
+JOURNAL_FICHIER = os.path.join(SAUV_DIR, "journal.json")
+CONFIG_FICHIER = os.path.join(BASE_DIR, "config.json")
+os.makedirs(CONV_DIR, exist_ok=True)
+os.makedirs(SAUV_DIR, exist_ok=True)
+
 # Entrées masquées dans l'explorateur (.env caché pour ne pas exposer la clé API).
-DOSSIERS_IGNORES = {".git", "venv", "__pycache__", ".idea", "node_modules", ".env"}
+DOSSIERS_IGNORES = {".git", "venv", "__pycache__", ".idea", "node_modules",
+                    ".env", "conversations", "sauvegardes"}
 
 # Outils qui exigent une confirmation de l'utilisateur avant exécution.
-OUTILS_SENSIBLES = {"ecrire_fichier", "executer_commande"}
+OUTILS_SENSIBLES = {"ecrire_fichier", "remplacer_texte", "executer_commande", "supprimer_fichier"}
+# Outils dont l'effet peut être annulé (sauvegarde du fichier avant exécution).
+OUTILS_ANNULABLES = {"ecrire_fichier", "remplacer_texte", "supprimer_fichier"}
+
+MODELE_DEFAUT = "mistral:devstral-latest"
+MODELES_MISTRAL = [
+    {"id": "mistral:devstral-latest", "nom": "Devstral · code (défaut)"},
+    {"id": "mistral:mistral-small-latest", "nom": "Mistral Small · rapide"},
+    {"id": "mistral:mistral-large-latest", "nom": "Mistral Large · puissant"},
+    {"id": "mistral:codestral-latest", "nom": "Codestral · code"},
+]
+OLLAMA_URL = os.getenv("OLLAMA_URL", "http://localhost:11434")
+
+# Modèles Groq recommandés (bons en function calling). La liste réellement
+# proposée est filtrée par ce que l'API Groq expose au moment de l'appel,
+# pour rester robuste si un modèle est renommé ou déprécié.
+GROQ_CANDIDATS = [
+    ("llama-3.3-70b-versatile", "Llama 3.3 70B · Groq (gratuit)"),
+    ("llama-3.1-8b-instant", "Llama 3.1 8B · Groq (rapide)"),
+    ("qwen-2.5-32b", "Qwen 2.5 32B · Groq"),
+    ("deepseek-r1-distill-llama-70b", "DeepSeek R1 70B · Groq"),
+]
+GROQ_EXCLUS = ("whisper", "tts", "guard", "distil", "embed", "vision")
+
+# Au-delà de ce volume (en caractères, ~4 caractères par token), on compacte
+# l'historique avant d'appeler le modèle.
+SEUIL_COMPACTION = 150_000
+
+SYSTEM_PROMPT = (
+    "Tu es un agent de développement expert. "
+    "Tu travailles dans le dossier de travail choisi par l'utilisateur, sous Windows "
+    "(executer_commande passe par cmd.exe, les chemins sont relatifs à ce dossier). "
+    "Méthode : explore d'abord (lister_fichiers, lire_fichier, chercher_texte), "
+    "puis agis, puis vérifie ton travail. "
+    "Pour modifier un fichier existant, préfère remplacer_texte (modification ciblée) "
+    "à ecrire_fichier (réécriture complète). N'invente jamais le contenu d'un fichier : lis-le. "
+    "Réponds en français, de façon concise, en Markdown ; cite les fichiers que tu modifies."
+)
 
 outils_definitions = [
     {
@@ -40,7 +96,7 @@ outils_definitions = [
         "type": "function",
         "function": {
             "name": "ecrire_fichier",
-            "description": "Écrit ou remplace le contenu d'un fichier",
+            "description": "Écrit ou remplace ENTIÈREMENT un fichier (crée les dossiers parents si besoin). Pour une modification partielle, utiliser remplacer_texte.",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -54,8 +110,24 @@ outils_definitions = [
     {
         "type": "function",
         "function": {
+            "name": "remplacer_texte",
+            "description": "Remplace toutes les occurrences d'un texte exact dans un fichier. À préférer à ecrire_fichier pour modifier un fichier existant. Le texte doit correspondre exactement (indentation comprise).",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "chemin": {"type": "string"},
+                    "ancien": {"type": "string"},
+                    "nouveau": {"type": "string"}
+                },
+                "required": ["chemin", "ancien", "nouveau"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
             "name": "executer_commande",
-            "description": "Exécute une commande shell et retourne le résultat",
+            "description": "Exécute une commande shell (cmd.exe) dans le dossier de travail et retourne le résultat",
             "parameters": {
                 "type": "object",
                 "properties": {"commande": {"type": "string"}},
@@ -67,144 +139,692 @@ outils_definitions = [
         "type": "function",
         "function": {
             "name": "lister_fichiers",
-            "description": "Liste les fichiers d'un dossier",
+            "description": "Liste les fichiers d'un dossier (les dossiers sont suffixés par /)",
             "parameters": {
                 "type": "object",
                 "properties": {"dossier": {"type": "string"}},
                 "required": []
             }
         }
-    }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "chercher_texte",
+            "description": "Cherche un texte (insensible à la casse) dans tous les fichiers du projet, récursivement. Retourne chemin:ligne: contenu",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "motif": {"type": "string"},
+                    "dossier": {"type": "string"}
+                },
+                "required": ["motif"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "creer_dossier",
+            "description": "Crée un dossier (et ses parents si besoin)",
+            "parameters": {
+                "type": "object",
+                "properties": {"chemin": {"type": "string"}},
+                "required": ["chemin"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "supprimer_fichier",
+            "description": "Supprime un fichier (pas un dossier)",
+            "parameters": {
+                "type": "object",
+                "properties": {"chemin": {"type": "string"}},
+                "required": ["chemin"]
+            }
+        }
+    },
 ]
 
 fonctions_disponibles = {
     "lire_fichier": tools.lire_fichier,
     "ecrire_fichier": tools.ecrire_fichier,
+    "remplacer_texte": tools.remplacer_texte,
     "executer_commande": tools.executer_commande,
     "lister_fichiers": tools.lister_fichiers,
+    "chercher_texte": tools.chercher_texte,
+    "creer_dossier": tools.creer_dossier,
+    "supprimer_fichier": tools.supprimer_fichier,
 }
 
 # État global (usage local mono-utilisateur).
-historique = []
-# Quand un outil sensible attend une confirmation, on garde ici la liste de
-# tool_calls en cours de traitement et l'index de celui en attente.
 en_attente = None
+stop_flag = {"on": False}
 
 
-def message_vers_dict(message):
-    """Convertit un message Mistral (objet) en dict JSON-sérialisable."""
-    d = {"role": message.role, "content": message.content}
-    if getattr(message, "tool_calls", None):
-        d["tool_calls"] = [
-            {
-                "id": tc.id,
-                "type": "function",
-                "function": {
-                    "name": tc.function.name,
-                    "arguments": tc.function.arguments,
-                },
-            }
-            for tc in message.tool_calls
-        ]
-    return d
+# ---------------------------------------------------------------------------
+# Configuration (dossier de travail + modèle par défaut)
+# ---------------------------------------------------------------------------
 
-
-def sauvegarder_historique():
-    """Écrit la conversation sur disque (best-effort)."""
+def charger_config():
+    config = {"workspace": BASE_DIR, "modele": MODELE_DEFAUT}
     try:
-        with open(FICHIER_HISTORIQUE, "w", encoding="utf-8") as f:
-            json.dump(historique, f, ensure_ascii=False, indent=2)
+        with open(CONFIG_FICHIER, "r", encoding="utf-8") as f:
+            config.update(json.load(f))
+    except (FileNotFoundError, json.JSONDecodeError):
+        pass
+    if not os.path.isdir(config.get("workspace", "")):
+        config["workspace"] = BASE_DIR
+    return config
+
+
+def sauver_config(config):
+    try:
+        with open(CONFIG_FICHIER, "w", encoding="utf-8") as f:
+            json.dump(config, f, ensure_ascii=False, indent=1)
+    except Exception as e:
+        print(f"[config] Échec sauvegarde : {e}")
+
+
+# ---------------------------------------------------------------------------
+# Persistance des conversations
+# ---------------------------------------------------------------------------
+
+def chemin_conv(cid):
+    if not cid or not cid.isalnum():
+        return None
+    return os.path.join(CONV_DIR, f"{cid}.json")
+
+
+def nouvelle_conv():
+    config = charger_config()
+    conv = {
+        "id": uuid.uuid4().hex[:12],
+        "titre": "Nouvelle conversation",
+        "cree": time.time(),
+        "messages": [],
+        "usage": {"entree": 0, "sortie": 0},
+        "workspace": config["workspace"],
+        "modele": config["modele"],
+    }
+    sauvegarder_conv(conv)
+    return conv
+
+
+def sauvegarder_conv(conv):
+    try:
+        with open(chemin_conv(conv["id"]), "w", encoding="utf-8") as f:
+            json.dump(conv, f, ensure_ascii=False, indent=1)
     except Exception as e:
         print(f"[persistance] Échec sauvegarde : {e}")
 
 
-def nettoyer_historique():
+def charger_conv(cid):
+    chemin = chemin_conv(cid)
+    if not chemin or not os.path.exists(chemin):
+        return None
+    try:
+        with open(chemin, "r", encoding="utf-8") as f:
+            conv = json.load(f)
+        conv.setdefault("usage", {"entree": 0, "sortie": 0})
+        conv.setdefault("workspace", BASE_DIR)
+        conv.setdefault("modele", MODELE_DEFAUT)
+        return conv
+    except Exception as e:
+        print(f"[persistance] Échec chargement {cid} : {e}")
+        return None
+
+
+def base_travail(conv):
+    ws = conv.get("workspace")
+    return ws if ws and os.path.isdir(ws) else BASE_DIR
+
+
+def liste_convs():
+    entrees = []
+    for nom in os.listdir(CONV_DIR):
+        if not nom.endswith(".json"):
+            continue
+        conv = charger_conv(nom[:-5])
+        if conv:
+            entrees.append({
+                "id": conv["id"],
+                "titre": conv.get("titre", "Sans titre"),
+                "cree": conv.get("cree", 0),
+                "nb": sum(1 for m in conv["messages"] if m.get("role") == "user"),
+            })
+    entrees.sort(key=lambda c: c["cree"], reverse=True)
+    return entrees
+
+
+def migrer_ancien_historique():
+    """Importe l'ancien conversations.json (format mono-conversation)."""
+    ancien = os.path.join(BASE_DIR, "conversations.json")
+    if not os.path.exists(ancien) or liste_convs():
+        return
+    try:
+        with open(ancien, "r", encoding="utf-8") as f:
+            messages = json.load(f)
+        if messages:
+            conv = nouvelle_conv()
+            conv["messages"] = messages
+            premier = next((m for m in messages if m.get("role") == "user"), None)
+            if premier:
+                conv["titre"] = (premier.get("content") or "")[:48] or conv["titre"]
+            nettoyer_conv(conv)
+            sauvegarder_conv(conv)
+            print("[migration] Ancienne conversation importée.")
+        os.rename(ancien, ancien + ".ancien")
+    except Exception as e:
+        print(f"[migration] Échec : {e}")
+
+
+def nettoyer_conv(conv):
     """Retire une éventuelle séquence de tool_calls incomplète en fin
     d'historique (ex. serveur arrêté pendant une confirmation en attente)."""
-    while historique:
-        dernier = historique[-1]
+    messages = conv["messages"]
+    while messages:
+        dernier = messages[-1]
         if dernier.get("role") == "tool":
-            historique.pop()
+            messages.pop()
             continue
         if dernier.get("role") == "assistant" and dernier.get("tool_calls"):
-            historique.pop()
+            messages.pop()
             continue
         break
 
 
-def charger_historique():
-    """Recharge la conversation depuis le disque au démarrage."""
-    global historique
-    if not os.path.exists(FICHIER_HISTORIQUE):
+def solder_attente():
+    """Clôt proprement une confirmation en suspens : les tool_calls restants
+    reçoivent un résultat « non exécuté » pour garder l'historique valide."""
+    global en_attente
+    if en_attente is None:
         return
+    conv = charger_conv(en_attente["conv"])
+    if conv:
+        appels = en_attente["tool_calls"]
+        for i in range(en_attente["index"], len(appels)):
+            conv["messages"].append({
+                "role": "tool",
+                "name": appels[i]["function"]["name"],
+                "content": "Non exécuté (action abandonnée par l'utilisateur)",
+                "tool_call_id": appels[i]["id"],
+            })
+        sauvegarder_conv(conv)
+    en_attente = None
+
+
+# ---------------------------------------------------------------------------
+# Sauvegardes avant modification (annulation)
+# ---------------------------------------------------------------------------
+
+def charger_journal():
     try:
-        with open(FICHIER_HISTORIQUE, "r", encoding="utf-8") as f:
-            historique = json.load(f)
-        nettoyer_historique()
-        print(f"[persistance] {len(historique)} messages rechargés.")
+        with open(JOURNAL_FICHIER, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except (FileNotFoundError, json.JSONDecodeError):
+        return []
+
+
+def sauver_journal(journal):
+    # On garde les 200 dernières entrées, et on purge leurs .bak orphelins.
+    for vieille in journal[:-200]:
+        bak = os.path.join(SAUV_DIR, vieille["id"] + ".bak")
+        if os.path.exists(bak):
+            try:
+                os.remove(bak)
+            except OSError:
+                pass
+    journal = journal[-200:]
+    try:
+        with open(JOURNAL_FICHIER, "w", encoding="utf-8") as f:
+            json.dump(journal, f, ensure_ascii=False, indent=1)
     except Exception as e:
-        print(f"[persistance] Échec chargement : {e}")
-        historique = []
+        print(f"[annulation] Échec journal : {e}")
 
 
-def demander_a_lia(messages):
-    response = client.chat.complete(
-        model=MODEL,
-        messages=messages,
+def sauvegarder_avant(nom_outil, args, ws):
+    """Avant un outil destructif : mémorise l'état du fichier cible.
+    Retourne l'identifiant d'annulation, ou None si rien à sauvegarder."""
+    chemin_rel = args.get("chemin")
+    if nom_outil not in OUTILS_ANNULABLES or not chemin_rel:
+        return None
+    cible = tools.resoudre(ws, chemin_rel)
+    if cible is None:
+        return None
+    ident = uuid.uuid4().hex[:10]
+    entree = {"id": ident, "date": time.time(), "outil": nom_outil,
+              "chemin": cible, "existait": os.path.isfile(cible)}
+    if entree["existait"]:
+        try:
+            shutil.copy2(cible, os.path.join(SAUV_DIR, ident + ".bak"))
+        except Exception:
+            return None
+    journal = charger_journal()
+    journal.append(entree)
+    sauver_journal(journal)
+    return ident
+
+
+def annuler_modification(ident):
+    """Restaure l'état d'avant une modification. Retourne (ok, message)."""
+    journal = charger_journal()
+    entree = next((e for e in journal if e["id"] == ident), None)
+    if entree is None:
+        return False, "Annulation introuvable (trop ancienne ?)"
+    cible = entree["chemin"]
+    if entree["existait"]:
+        bak = os.path.join(SAUV_DIR, ident + ".bak")
+        if not os.path.exists(bak):
+            return False, "Sauvegarde introuvable"
+        try:
+            os.makedirs(os.path.dirname(cible), exist_ok=True)
+            shutil.copy2(bak, cible)
+        except Exception as e:
+            return False, f"Restauration impossible : {e}"
+        return True, f"Fichier restauré : {os.path.basename(cible)}"
+    # Le fichier n'existait pas : annuler = supprimer la création.
+    try:
+        if os.path.isfile(cible):
+            os.remove(cible)
+    except Exception as e:
+        return False, f"Suppression impossible : {e}"
+    return True, f"Création annulée : {os.path.basename(cible)}"
+
+
+# ---------------------------------------------------------------------------
+# Compaction du contexte
+# ---------------------------------------------------------------------------
+
+def taille_messages(messages):
+    total = 0
+    for m in messages:
+        total += len(str(m.get("content") or ""))
+        for tc in m.get("tool_calls") or []:
+            total += len(tc["function"].get("arguments") or "")
+    return total
+
+
+def compacter(conv):
+    """Réduit l'historique quand il devient trop volumineux.
+    Retourne True si une compaction a eu lieu."""
+    messages = conv["messages"]
+    if taille_messages(messages) < SEUIL_COMPACTION:
+        return False
+
+    # Étape 1 : purger le contenu des vieux résultats d'outils (le plus gros).
+    indices_tool = [i for i, m in enumerate(messages) if m.get("role") == "tool"]
+    for i in indices_tool[:-8]:
+        if len(messages[i].get("content") or "") > 400:
+            messages[i]["content"] = "[résultat d'outil purgé pour économiser le contexte]"
+    if taille_messages(messages) < SEUIL_COMPACTION:
+        sauvegarder_conv(conv)
+        return True
+
+    # Étape 2 : résumer la première moitié de la conversation.
+    # On coupe sur un message utilisateur pour ne pas casser une séquence d'outils.
+    limite = max(1, int(len(messages) * 0.6))
+    coupe = 0
+    for i in range(limite, 0, -1):
+        if messages[i].get("role") == "user":
+            coupe = i
+            break
+    if coupe == 0:
+        return True  # rien à couper proprement, la purge devra suffire
+
+    extrait = json.dumps(messages[:coupe], ensure_ascii=False)[:60000]
+    try:
+        reponse = client.chat.complete(
+            model="mistral-small-latest",
+            messages=[{
+                "role": "user",
+                "content": "Résume précisément cette partie de conversation entre un "
+                           "utilisateur et un agent de code (décisions prises, fichiers "
+                           "modifiés, état du travail). Réponds uniquement par le résumé, "
+                           "en français :\n\n" + extrait,
+            }],
+        )
+        resume = reponse.choices[0].message.content or ""
+    except Exception:
+        # Pas de résumé possible (ex. modèle local seul) : troncature simple.
+        resume = "(résumé indisponible : début de conversation tronqué)"
+    conv["messages"] = [{
+        "role": "user",
+        "content": "[Contexte résumé automatiquement — début de la conversation]\n\n" + resume,
+    }] + messages[coupe:]
+    sauvegarder_conv(conv)
+    return True
+
+
+# ---------------------------------------------------------------------------
+# Tours de modèle (Mistral API et Ollama local)
+# ---------------------------------------------------------------------------
+
+def tour_mistral(conv, modele):
+    texte = ""
+    appels = []
+    flux = client.chat.stream(
+        model=modele,
+        messages=[{"role": "system", "content": SYSTEM_PROMPT}] + conv["messages"],
         tools=outils_definitions,
-        tool_choice="auto"
+        tool_choice="auto",
     )
-    return response.choices[0].message
+    for event in flux:
+        if stop_flag["on"]:
+            break
+        chunk = getattr(event, "data", None) or event
+        usage = getattr(chunk, "usage", None)
+        if usage is not None and getattr(usage, "prompt_tokens", None) is not None:
+            conv["usage"]["entree"] += usage.prompt_tokens or 0
+            conv["usage"]["sortie"] += usage.completion_tokens or 0
+        choices = getattr(chunk, "choices", None)
+        if not choices:
+            continue
+        delta = choices[0].delta
+
+        contenu = getattr(delta, "content", None)
+        if isinstance(contenu, list):
+            contenu = "".join(
+                (getattr(p, "text", None) or (p.get("text", "") if isinstance(p, dict) else "")) or ""
+                for p in contenu
+            )
+        if isinstance(contenu, str) and contenu:
+            texte += contenu
+            yield {"type": "token", "t": contenu}
+
+        tcs = getattr(delta, "tool_calls", None)
+        if isinstance(tcs, list):
+            for tc in tcs:
+                idx = getattr(tc, "index", None)
+                if not isinstance(idx, int):
+                    idx = len(appels) if getattr(tc, "id", None) or not appels else len(appels) - 1
+                while len(appels) <= idx:
+                    appels.append({"id": None, "type": "function",
+                                   "function": {"name": "", "arguments": ""}})
+                a = appels[idx]
+                if getattr(tc, "id", None):
+                    a["id"] = tc.id
+                fn = getattr(tc, "function", None)
+                if fn is not None:
+                    nom = getattr(fn, "name", None)
+                    if isinstance(nom, str) and nom:
+                        a["function"]["name"] = nom
+                    args = getattr(fn, "arguments", None)
+                    if args:
+                        if not isinstance(args, str):
+                            args = json.dumps(args)
+                        a["function"]["arguments"] += args
+    for a in appels:
+        if not a["id"]:
+            a["id"] = uuid.uuid4().hex[:9]
+    return texte, appels
 
 
-def executer_outil(tool_call):
-    """Exécute un tool_call et ajoute son résultat à l'historique."""
-    nom = tool_call.function.name
-    arguments = json.loads(tool_call.function.arguments)
-    resultat = fonctions_disponibles[nom](**arguments)
-    historique.append({
+def messages_pour_ollama(conv):
+    """Convertit l'historique (format Mistral) vers le format Ollama."""
+    messages = [{"role": "system", "content": SYSTEM_PROMPT}]
+    for m in conv["messages"]:
+        role = m.get("role")
+        if role == "assistant" and m.get("tool_calls"):
+            appels = []
+            for tc in m["tool_calls"]:
+                try:
+                    arguments = json.loads(tc["function"]["arguments"] or "{}")
+                except json.JSONDecodeError:
+                    arguments = {}
+                appels.append({"function": {"name": tc["function"]["name"],
+                                            "arguments": arguments}})
+            messages.append({"role": "assistant", "content": m.get("content") or "",
+                             "tool_calls": appels})
+        elif role == "tool":
+            messages.append({"role": "tool", "content": m.get("content") or ""})
+        else:
+            messages.append({"role": role, "content": m.get("content") or ""})
+    return messages
+
+
+def tour_ollama(conv, modele):
+    texte = ""
+    appels = []
+    corps = json.dumps({
+        "model": modele,
+        "messages": messages_pour_ollama(conv),
+        "tools": outils_definitions,
+        "stream": True,
+    }).encode("utf-8")
+    requete = urllib.request.Request(
+        OLLAMA_URL + "/api/chat", data=corps,
+        headers={"Content-Type": "application/json"},
+    )
+    with urllib.request.urlopen(requete, timeout=600) as reponse:
+        for ligne in reponse:
+            if stop_flag["on"]:
+                break
+            try:
+                d = json.loads(ligne)
+            except json.JSONDecodeError:
+                continue
+            message = d.get("message") or {}
+            contenu = message.get("content")
+            if contenu:
+                texte += contenu
+                yield {"type": "token", "t": contenu}
+            for tc in message.get("tool_calls") or []:
+                fn = tc.get("function") or {}
+                appels.append({
+                    "id": uuid.uuid4().hex[:9],
+                    "type": "function",
+                    "function": {
+                        "name": fn.get("name", ""),
+                        "arguments": json.dumps(fn.get("arguments") or {}, ensure_ascii=False),
+                    },
+                })
+            if d.get("done"):
+                conv["usage"]["entree"] += d.get("prompt_eval_count") or 0
+                conv["usage"]["sortie"] += d.get("eval_count") or 0
+    return texte, appels
+
+
+def tour_groq(conv, modele):
+    """Streame un tour via Groq (API compatible OpenAI). Même contrat de sortie
+    que tour_mistral : (texte, appels)."""
+    if not groq_client:
+        raise RuntimeError("Clé Groq absente : ajoute GROQ_API_KEY dans le fichier .env")
+    texte = ""
+    appels = []
+    flux = groq_client.chat.completions.create(
+        model=modele,
+        messages=[{"role": "system", "content": SYSTEM_PROMPT}] + conv["messages"],
+        tools=outils_definitions,
+        tool_choice="auto",
+        stream=True,
+        stream_options={"include_usage": True},
+    )
+    for chunk in flux:
+        if stop_flag["on"]:
+            break
+        usage = getattr(chunk, "usage", None)
+        if usage is not None:
+            conv["usage"]["entree"] += getattr(usage, "prompt_tokens", 0) or 0
+            conv["usage"]["sortie"] += getattr(usage, "completion_tokens", 0) or 0
+        if not getattr(chunk, "choices", None):
+            continue
+        delta = chunk.choices[0].delta
+        contenu = getattr(delta, "content", None)
+        if contenu:
+            texte += contenu
+            yield {"type": "token", "t": contenu}
+        for tc in (getattr(delta, "tool_calls", None) or []):
+            idx = tc.index if isinstance(getattr(tc, "index", None), int) else max(0, len(appels) - 1)
+            while len(appels) <= idx:
+                appels.append({"id": None, "type": "function",
+                               "function": {"name": "", "arguments": ""}})
+            a = appels[idx]
+            if getattr(tc, "id", None):
+                a["id"] = tc.id
+            fn = getattr(tc, "function", None)
+            if fn is not None:
+                if getattr(fn, "name", None):
+                    a["function"]["name"] = fn.name
+                if getattr(fn, "arguments", None):
+                    a["function"]["arguments"] += fn.arguments
+    for a in appels:
+        if not a["id"]:
+            a["id"] = uuid.uuid4().hex[:9]
+    return texte, appels
+
+
+def tour_modele(conv):
+    modele = conv.get("modele") or MODELE_DEFAUT
+    fournisseur, _, nom = modele.partition(":")
+    if fournisseur == "ollama":
+        return (yield from tour_ollama(conv, nom))
+    if fournisseur == "groq":
+        return (yield from tour_groq(conv, nom))
+    return (yield from tour_mistral(conv, nom or modele))
+
+
+# ---------------------------------------------------------------------------
+# Boucle de l'agent (streaming)
+# ---------------------------------------------------------------------------
+
+def cible_outil(nom, args):
+    """Petit libellé affiché dans la chip d'activité du front."""
+    return (args.get("chemin") or args.get("commande")
+            or args.get("motif") or args.get("dossier") or "")
+
+
+def calculer_diff(ws, chemin_rel, nouveau):
+    """Diff unifié entre le fichier actuel et le contenu proposé."""
+    cible = tools.resoudre(ws, chemin_rel or "")
+    try:
+        if cible and os.path.isfile(cible):
+            with open(cible, "r", encoding="utf-8") as f:
+                ancien = f.read().splitlines()
+        else:
+            ancien = []
+    except Exception:
+        return None
+    diff = list(difflib.unified_diff(
+        ancien, (nouveau or "").splitlines(),
+        fromfile=f"{chemin_rel} (actuel)", tofile=f"{chemin_rel} (proposé)", lineterm=""))
+    return "\n".join(diff) if diff else None
+
+
+def diff_remplacement(ws, args):
+    """Diff prévisionnel d'un remplacer_texte."""
+    cible = tools.resoudre(ws, args.get("chemin") or "")
+    if not cible or not os.path.isfile(cible):
+        return None
+    try:
+        with open(cible, "r", encoding="utf-8") as f:
+            contenu = f.read()
+    except Exception:
+        return None
+    ancien_txt = args.get("ancien") or ""
+    if not ancien_txt or ancien_txt not in contenu:
+        return None
+    propose = contenu.replace(ancien_txt, args.get("nouveau") or "")
+    return calculer_diff(ws, args.get("chemin"), propose)
+
+
+def executer_outil(conv, tc, args, ws):
+    """Exécute un tool_call (dict) et ajoute son résultat à la conversation."""
+    nom = tc["function"]["name"]
+    fonction = fonctions_disponibles.get(nom)
+    try:
+        resultat = str(fonction(**args, base=ws)) if fonction else f"Outil inconnu : {nom}"
+    except TypeError as e:
+        resultat = f"Erreur d'arguments : {e}"
+    if len(resultat) > 30000:
+        resultat = resultat[:30000] + "\n[... résultat tronqué ...]"
+    conv["messages"].append({
         "role": "tool",
         "name": nom,
-        "content": str(resultat),
-        "tool_call_id": tool_call.id,
+        "content": resultat,
+        "tool_call_id": tc["id"],
     })
 
 
-def traiter():
-    """Fait avancer l'agent jusqu'à une réponse finale ou une demande de
-    confirmation. Reprend automatiquement si `en_attente` est déjà positionné."""
+def continuer(conv):
+    """Générateur central : fait avancer l'agent en émettant des événements
+    NDJSON jusqu'à une réponse finale, une confirmation ou un arrêt."""
     global en_attente
+    ws = base_travail(conv)
+    try:
+        while True:
+            # 1. Traiter les tool_calls en cours s'il y en a.
+            if en_attente and en_attente.get("conv") == conv["id"]:
+                appels = en_attente["tool_calls"]
+                while en_attente["index"] < len(appels):
+                    if stop_flag["on"]:
+                        break
+                    tc = appels[en_attente["index"]]
+                    nom = tc["function"]["name"]
+                    try:
+                        args = json.loads(tc["function"]["arguments"] or "{}")
+                    except json.JSONDecodeError:
+                        args = {}
+                    if nom in OUTILS_SENSIBLES and not en_attente.get("confirme"):
+                        charge = {"type": "confirmation", "outil": nom, "arguments": args}
+                        if nom == "ecrire_fichier":
+                            charge["diff"] = calculer_diff(ws, args.get("chemin"),
+                                                           args.get("contenu"))
+                        elif nom == "remplacer_texte":
+                            charge["diff"] = diff_remplacement(ws, args)
+                        sauvegarder_conv(conv)
+                        yield charge
+                        return
+                    en_attente["confirme"] = False
+                    evenement = {"type": "outil", "nom": nom, "cible": cible_outil(nom, args)}
+                    ident = sauvegarder_avant(nom, args, ws)
+                    if ident:
+                        evenement["annulation"] = ident
+                    yield evenement
+                    executer_outil(conv, tc, args, ws)
+                    en_attente["index"] += 1
+                if en_attente["index"] >= len(appels):
+                    en_attente = None
+                sauvegarder_conv(conv)
 
-    while True:
-        # Nouveau tour du modèle si rien n'est en attente.
-        if en_attente is None:
-            message = demander_a_lia(historique)
-            if not message.tool_calls:
-                historique.append(message_vers_dict(message))
-                return {"type": "reponse", "reponse": message.content}
-            historique.append(message_vers_dict(message))
-            en_attente = {"tool_calls": message.tool_calls, "index": 0}
+            # 2. Arrêt demandé : on solde ce qui reste et on termine.
+            if stop_flag["on"]:
+                solder_attente()
+                sauvegarder_conv(conv)
+                yield {"type": "fin", "usage": conv["usage"], "arret": True}
+                return
 
-        # Traiter les tool_calls du message courant, un par un.
-        tool_calls = en_attente["tool_calls"]
-        while en_attente["index"] < len(tool_calls):
-            tool_call = tool_calls[en_attente["index"]]
-            nom = tool_call.function.name
-
-            if nom in OUTILS_SENSIBLES:
-                # Pause : on rend la main au front pour demander confirmation.
-                return {
-                    "type": "confirmation",
-                    "outil": nom,
-                    "arguments": json.loads(tool_call.function.arguments),
-                }
-
-            executer_outil(tool_call)
-            en_attente["index"] += 1
-
-        # Tous les tool_calls sont traités : on relance un tour du modèle.
+            # 3. Nouveau tour du modèle (streamé).
+            texte, appels = yield from tour_modele(conv)
+            message = {"role": "assistant", "content": texte}
+            if appels:
+                message["tool_calls"] = appels
+            conv["messages"].append(message)
+            sauvegarder_conv(conv)
+            if not appels:
+                yield {"type": "fin", "usage": conv["usage"]}
+                return
+            en_attente = {"conv": conv["id"], "tool_calls": appels,
+                          "index": 0, "confirme": False}
+    except Exception as e:
         en_attente = None
+        sauvegarder_conv(conv)
+        yield {"type": "erreur", "message": str(e)}
 
+
+def reponse_ndjson(generateur):
+    def encoder():
+        for evenement in generateur:
+            yield json.dumps(evenement, ensure_ascii=False) + "\n"
+    return Response(encoder(), mimetype="application/x-ndjson",
+                    headers={"X-Accel-Buffering": "no", "Cache-Control": "no-cache"})
+
+
+# ---------------------------------------------------------------------------
+# Routes : pages
+# ---------------------------------------------------------------------------
 
 @app.route("/")
 def index():
@@ -213,90 +833,360 @@ def index():
 
 @app.route("/sw.js")
 def service_worker():
-    # Servi depuis la racine pour que son scope couvre tout le site.
     return send_from_directory("static", "sw.js", mimetype="application/javascript")
 
 
+# ---------------------------------------------------------------------------
+# Routes : chat (streaming NDJSON)
+# ---------------------------------------------------------------------------
+
 @app.route("/api/chat", methods=["POST"])
 def api_chat():
-    message_utilisateur = request.json.get("message", "")
-    historique.append({"role": "user", "content": message_utilisateur})
-    try:
-        resultat = traiter()
-    except Exception as e:
-        resultat = {"type": "reponse", "reponse": f"Erreur : {e}"}
-    sauvegarder_historique()
-    return jsonify(resultat)
+    donnees = request.json or {}
+    texte = (donnees.get("message") or "").strip()
+    if not texte:
+        return jsonify({"erreur": "Message vide"}), 400
+
+    stop_flag["on"] = False
+    solder_attente()  # une confirmation ignorée = abandonnée
+
+    conv = charger_conv(donnees.get("conversation") or "") or nouvelle_conv()
+    nettoyer_conv(conv)
+    conv["messages"].append({"role": "user", "content": texte})
+    if conv["titre"] == "Nouvelle conversation":
+        conv["titre"] = texte[:48] + ("…" if len(texte) > 48 else "")
+    sauvegarder_conv(conv)
+
+    def generer():
+        yield {"type": "conversation", "id": conv["id"], "titre": conv["titre"]}
+        try:
+            if compacter(conv):
+                yield {"type": "compaction"}
+        except Exception:
+            pass
+        yield from continuer(conv)
+
+    return reponse_ndjson(generer())
 
 
 @app.route("/api/confirmer", methods=["POST"])
 def api_confirmer():
     global en_attente
     if en_attente is None:
-        return jsonify({"type": "reponse", "reponse": "Aucune action en attente."})
+        return reponse_ndjson(iter([{"type": "fin", "usage": {"entree": 0, "sortie": 0}}]))
 
-    decision = request.json.get("decision", "non")
-    tool_call = en_attente["tool_calls"][en_attente["index"]]
-
-    try:
-        if decision == "oui":
-            executer_outil(tool_call)
-        else:
-            historique.append({
-                "role": "tool",
-                "name": tool_call.function.name,
-                "content": "Action refusée par l'utilisateur",
-                "tool_call_id": tool_call.id,
-            })
-        en_attente["index"] += 1
-        resultat = traiter()
-    except Exception as e:
+    stop_flag["on"] = False
+    conv = charger_conv(en_attente["conv"])
+    if conv is None:
         en_attente = None
-        resultat = {"type": "reponse", "reponse": f"Erreur : {e}"}
-    sauvegarder_historique()
-    return jsonify(resultat)
+        return reponse_ndjson(iter([{"type": "erreur", "message": "Conversation introuvable"}]))
+
+    decision = (request.json or {}).get("decision", "non")
+    if decision == "oui":
+        en_attente["confirme"] = True
+    else:
+        tc = en_attente["tool_calls"][en_attente["index"]]
+        conv["messages"].append({
+            "role": "tool",
+            "name": tc["function"]["name"],
+            "content": "Action refusée par l'utilisateur",
+            "tool_call_id": tc["id"],
+        })
+        en_attente["index"] += 1
+        sauvegarder_conv(conv)
+
+    return reponse_ndjson(continuer(conv))
 
 
-@app.route("/api/historique")
-def api_historique():
-    """Renvoie les messages affichables (demandes utilisateur + réponses
-    texte de l'agent), pour reconstruire le fil au chargement de la page."""
-    messages = []
-    for m in historique:
-        role = m.get("role")
-        if role == "user":
-            messages.append({"role": "user", "content": m.get("content", "")})
-        elif role == "assistant" and not m.get("tool_calls") and m.get("content"):
-            messages.append({"role": "agent", "content": m.get("content", "")})
-    return jsonify({"messages": messages})
-
-
-@app.route("/api/nouvelle", methods=["POST"])
-def api_nouvelle():
-    """Vide la conversation en cours."""
-    global historique, en_attente
-    historique = []
-    en_attente = None
-    sauvegarder_historique()
+@app.route("/api/stop", methods=["POST"])
+def api_stop():
+    stop_flag["on"] = True
     return jsonify({"ok": True})
 
 
-def chemin_sur(rel):
-    """Résout un chemin relatif et garantit qu'il reste dans BASE_DIR.
-    Retourne le chemin absolu, ou None si tentative de sortie du dossier."""
-    cible = os.path.abspath(os.path.join(BASE_DIR, rel or ""))
+@app.route("/api/annuler", methods=["POST"])
+def api_annuler():
+    ident = (request.json or {}).get("id", "")
+    ok, message = annuler_modification(ident)
+    return jsonify({"ok": ok, "message": message})
+
+
+# ---------------------------------------------------------------------------
+# Routes : configuration et modèles
+# ---------------------------------------------------------------------------
+
+@app.route("/api/config")
+def api_config():
+    return jsonify(charger_config())
+
+
+@app.route("/api/config", methods=["POST"])
+def api_config_maj():
+    donnees = request.json or {}
+    config = charger_config()
+    ws = donnees.get("workspace")
+    if ws and os.path.isdir(ws):
+        config["workspace"] = os.path.abspath(ws)
+    if donnees.get("modele"):
+        config["modele"] = donnees["modele"]
+    sauver_config(config)
+    return jsonify(config)
+
+
+def modeles_groq():
+    """Modèles Groq réellement disponibles (recommandés d'abord).
+    Vide si aucune clé n'est configurée."""
+    if not groq_client:
+        return []
     try:
-        if os.path.commonpath([BASE_DIR, cible]) != BASE_DIR:
+        requete = urllib.request.Request(
+            "https://api.groq.com/openai/v1/models",
+            headers={"Authorization": f"Bearer {GROQ_API_KEY}"})
+        with urllib.request.urlopen(requete, timeout=4) as r:
+            dispos = {m.get("id") for m in json.load(r).get("data", [])}
+    except Exception:
+        # Clé présente mais liste inaccessible : proposer les candidats connus.
+        return [{"id": "groq:" + mid, "nom": nom} for mid, nom in GROQ_CANDIDATS]
+    labels = dict(GROQ_CANDIDATS)
+    modeles = [{"id": "groq:" + mid, "nom": nom}
+               for mid, nom in GROQ_CANDIDATS if mid in dispos]
+    for mid in sorted(dispos):
+        if mid in labels or any(x in mid.lower() for x in GROQ_EXCLUS):
+            continue
+        modeles.append({"id": "groq:" + mid, "nom": mid + " · Groq"})
+    return modeles[:10]
+
+
+@app.route("/api/modeles")
+def api_modeles():
+    modeles = list(MODELES_MISTRAL) + modeles_groq()
+    try:
+        with urllib.request.urlopen(OLLAMA_URL + "/api/tags", timeout=1.5) as r:
+            tags = json.load(r)
+        for m in tags.get("models", []):
+            nom = m.get("name", "")
+            if nom:
+                modeles.append({"id": "ollama:" + nom, "nom": nom + " · local"})
+    except Exception:
+        pass  # Ollama non installé ou éteint
+    return jsonify({"modeles": modeles})
+
+
+@app.route("/api/dossiers")
+def api_dossiers():
+    """Navigation dans les dossiers du disque (pour choisir le workspace)."""
+    chemin = request.args.get("chemin", "")
+    if not chemin:
+        lecteurs = [f"{lettre}:\\" for lettre in "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+                    if os.path.exists(f"{lettre}:\\")]
+        return jsonify({"chemin": "", "parent": None,
+                        "dossiers": [{"nom": l, "chemin": l} for l in lecteurs]})
+    chemin = os.path.abspath(chemin)
+    if not os.path.isdir(chemin):
+        return jsonify({"erreur": "Dossier invalide"}), 400
+    dossiers = []
+    try:
+        for nom in sorted(os.listdir(chemin), key=str.lower):
+            complet = os.path.join(chemin, nom)
+            if nom.startswith("$") or nom in {"System Volume Information"}:
+                continue
+            try:
+                if os.path.isdir(complet):
+                    dossiers.append({"nom": nom, "chemin": complet})
+            except OSError:
+                continue
+    except PermissionError:
+        return jsonify({"erreur": "Accès refusé"}), 403
+    parent = os.path.dirname(chemin.rstrip("\\/"))
+    if parent == chemin or not parent:
+        parent = ""
+    return jsonify({"chemin": chemin, "parent": parent, "dossiers": dossiers})
+
+
+# ---------------------------------------------------------------------------
+# Routes : conversations
+# ---------------------------------------------------------------------------
+
+@app.route("/api/conversations")
+def api_conversations():
+    return jsonify({"conversations": liste_convs()})
+
+
+@app.route("/api/conversations", methods=["POST"])
+def api_conversations_creer():
+    conv = nouvelle_conv()
+    return jsonify({"id": conv["id"], "titre": conv["titre"],
+                    "workspace": conv["workspace"], "modele": conv["modele"]})
+
+
+@app.route("/api/conversations/<cid>")
+def api_conversation(cid):
+    conv = charger_conv(cid)
+    if conv is None:
+        return jsonify({"erreur": "Conversation introuvable"}), 404
+    affichage = []
+    for m in conv["messages"]:
+        role = m.get("role")
+        if role == "user":
+            affichage.append({"role": "user", "content": m.get("content", "")})
+        elif role == "assistant":
+            if m.get("content"):
+                affichage.append({"role": "agent", "content": m["content"]})
+            for tc in m.get("tool_calls") or []:
+                try:
+                    args = json.loads(tc["function"]["arguments"] or "{}")
+                except json.JSONDecodeError:
+                    args = {}
+                affichage.append({"role": "outil",
+                                  "nom": tc["function"]["name"],
+                                  "cible": cible_outil(tc["function"]["name"], args)})
+    return jsonify({"id": conv["id"], "titre": conv["titre"],
+                    "usage": conv["usage"], "messages": affichage,
+                    "workspace": conv["workspace"], "modele": conv["modele"]})
+
+
+@app.route("/api/conversations/<cid>", methods=["DELETE"])
+def api_conversation_supprimer(cid):
+    global en_attente
+    chemin = chemin_conv(cid)
+    if chemin and os.path.exists(chemin):
+        if en_attente and en_attente.get("conv") == cid:
+            en_attente = None
+        os.remove(chemin)
+        return jsonify({"ok": True})
+    return jsonify({"erreur": "Conversation introuvable"}), 404
+
+
+@app.route("/api/conversations/<cid>", methods=["PATCH"])
+def api_conversation_modifier(cid):
+    conv = charger_conv(cid)
+    if conv is None:
+        return jsonify({"erreur": "Conversation introuvable"}), 404
+    donnees = request.json or {}
+    titre = (donnees.get("titre") or "").strip()
+    if titre:
+        conv["titre"] = titre[:60]
+    ws = donnees.get("workspace")
+    if ws and os.path.isdir(ws):
+        conv["workspace"] = os.path.abspath(ws)
+    if donnees.get("modele"):
+        conv["modele"] = donnees["modele"]
+    sauvegarder_conv(conv)
+    return jsonify({"ok": True, "titre": conv["titre"],
+                    "workspace": conv["workspace"], "modele": conv["modele"]})
+
+
+# ---------------------------------------------------------------------------
+# Routes : Git
+# ---------------------------------------------------------------------------
+
+def git(ws, *arguments):
+    try:
+        return subprocess.run(["git"] + list(arguments), cwd=ws,
+                              capture_output=True, text=True, timeout=30)
+    except FileNotFoundError:
+        return None  # git absent du PATH
+    except subprocess.TimeoutExpired:
+        return None
+
+
+def ws_requete():
+    """Dossier de travail passé en paramètre d'URL (routes GET)."""
+    ws = request.args.get("ws")
+    return ws if ws and os.path.isdir(ws) else BASE_DIR
+
+
+@app.route("/api/git/statut")
+def api_git_statut():
+    ws = ws_requete()
+    r = git(ws, "rev-parse", "--is-inside-work-tree")
+    if r is None:
+        return jsonify({"erreur": "git introuvable sur cette machine"}), 500
+    if r.returncode != 0 or "true" not in r.stdout:
+        return jsonify({"repo": False})
+    branche = (git(ws, "branch", "--show-current") or r).stdout.strip() or "(détaché)"
+    porcelain = git(ws, "status", "--porcelain")
+    fichiers = []
+    for ligne in (porcelain.stdout if porcelain else "").splitlines():
+        if len(ligne) > 3:
+            fichiers.append({"etat": ligne[:2].strip() or "??", "chemin": ligne[3:].strip()})
+    return jsonify({"repo": True, "branche": branche, "fichiers": fichiers})
+
+
+@app.route("/api/git/diff")
+def api_git_diff():
+    ws = ws_requete()
+    chemin = request.args.get("chemin")
+    arguments = ["diff", "HEAD"]
+    if chemin:
+        arguments += ["--", chemin]
+    r = git(ws, *arguments)
+    if r is None or r.returncode != 0:
+        r = git(ws, "diff") if not chemin else git(ws, "diff", "--", chemin)
+    return jsonify({"diff": (r.stdout if r else "") or ""})
+
+
+@app.route("/api/git/commit", methods=["POST"])
+def api_git_commit():
+    donnees = request.json or {}
+    ws = donnees.get("ws")
+    ws = ws if ws and os.path.isdir(ws) else BASE_DIR
+    message = (donnees.get("message") or "").strip()
+    if not message:
+        return jsonify({"erreur": "Message de commit vide"}), 400
+    r = git(ws, "add", "-A")
+    if r is None or r.returncode != 0:
+        return jsonify({"erreur": (r.stderr if r else "git add impossible")}), 400
+    r = git(ws, "commit", "-m", message)
+    if r is None or r.returncode != 0:
+        return jsonify({"erreur": (r.stderr or r.stdout if r else "commit impossible").strip()}), 400
+    return jsonify({"ok": True, "sortie": r.stdout.strip()})
+
+
+@app.route("/api/git/restaurer", methods=["POST"])
+def api_git_restaurer():
+    donnees = request.json or {}
+    ws = donnees.get("ws")
+    ws = ws if ws and os.path.isdir(ws) else BASE_DIR
+    chemin = donnees.get("chemin")
+    if not chemin:
+        return jsonify({"erreur": "Chemin manquant"}), 400
+    r = git(ws, "checkout", "HEAD", "--", chemin)
+    if r is None or r.returncode != 0:
+        return jsonify({"erreur": (r.stderr if r else "restauration impossible").strip()}), 400
+    return jsonify({"ok": True})
+
+
+@app.route("/api/git/init", methods=["POST"])
+def api_git_init():
+    donnees = request.json or {}
+    ws = donnees.get("ws")
+    ws = ws if ws and os.path.isdir(ws) else BASE_DIR
+    r = git(ws, "init")
+    if r is None or r.returncode != 0:
+        return jsonify({"erreur": (r.stderr if r else "git init impossible").strip()}), 400
+    return jsonify({"ok": True})
+
+
+# ---------------------------------------------------------------------------
+# Routes : explorateur de fichiers (suit le dossier de travail)
+# ---------------------------------------------------------------------------
+
+def chemin_sur(base, rel):
+    """Résout un chemin relatif et garantit qu'il reste dans `base`."""
+    cible = os.path.abspath(os.path.join(base, rel or ""))
+    try:
+        if os.path.commonpath([os.path.abspath(base), cible]) != os.path.abspath(base):
             return None
-    except ValueError:  # chemins sur des lecteurs différents (Windows)
+    except ValueError:
         return None
     return cible
 
 
 @app.route("/api/arborescence")
 def api_arborescence():
-    """Liste le contenu d'un dossier (dossiers d'abord, puis fichiers)."""
-    cible = chemin_sur(request.args.get("dossier", ""))
+    ws = ws_requete()
+    cible = chemin_sur(ws, request.args.get("dossier", ""))
     if not cible or not os.path.isdir(cible):
         return jsonify({"erreur": "Dossier invalide"}), 400
     entrees = []
@@ -307,7 +1197,7 @@ def api_arborescence():
         est_dossier = os.path.isdir(chemin_abs)
         entrees.append({
             "nom": nom,
-            "chemin": os.path.relpath(chemin_abs, BASE_DIR).replace("\\", "/"),
+            "chemin": os.path.relpath(chemin_abs, ws).replace("\\", "/"),
             "type": "dossier" if est_dossier else "fichier",
         })
     entrees.sort(key=lambda e: (e["type"] != "dossier", e["nom"].lower()))
@@ -316,9 +1206,9 @@ def api_arborescence():
 
 @app.route("/api/fichier")
 def api_fichier():
-    """Renvoie le contenu texte d'un fichier du projet."""
+    ws = ws_requete()
     rel = request.args.get("chemin", "")
-    cible = chemin_sur(rel)
+    cible = chemin_sur(ws, rel)
     if not cible or not os.path.isfile(cible):
         return jsonify({"erreur": "Fichier invalide"}), 400
     if os.path.basename(cible) in DOSSIERS_IGNORES:
@@ -335,7 +1225,26 @@ def api_fichier():
     return jsonify({"chemin": rel, "contenu": contenu})
 
 
-charger_historique()
+@app.route("/api/fichier/sauver", methods=["POST"])
+def api_fichier_sauver():
+    donnees = request.json or {}
+    ws = donnees.get("ws")
+    ws = ws if ws and os.path.isdir(ws) else BASE_DIR
+    rel = donnees.get("chemin", "")
+    cible = chemin_sur(ws, rel)
+    if not cible or not os.path.isfile(cible):
+        return jsonify({"erreur": "Fichier invalide"}), 400
+    if os.path.basename(cible) in DOSSIERS_IGNORES:
+        return jsonify({"erreur": "Fichier protégé"}), 403
+    try:
+        with open(cible, "w", encoding="utf-8") as f:
+            f.write(donnees.get("contenu", ""))
+    except Exception as e:
+        return jsonify({"erreur": f"Écriture impossible : {e}"}), 400
+    return jsonify({"ok": True})
+
+
+migrer_ancien_historique()
 
 if __name__ == "__main__":
-    app.run(debug=True, port=5000)
+    app.run(debug=True, port=5000, threaded=True)
