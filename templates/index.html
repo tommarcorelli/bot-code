@@ -9,7 +9,7 @@
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/atom-one-dark.min.css">
-<link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}?v=9">
+<link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}?v=10">
 
 <!-- PWA -->
 <link rel="manifest" href="{{ url_for('static', filename='manifest.json') }}">
@@ -55,6 +55,7 @@
     <div id="chat">
       <div class="vide" id="accueil">
         <div class="grand-logo"><img src="{{ url_for('static', filename='icon-192.png') }}" alt="Cortex" class="logo-orbe"></div>
+        <p class="salut" id="salut"></p>
         <h2>Prêt à coder</h2>
         <p>Voici le dossier dans lequel l'agent travaille. Change-le quand tu veux, puis demande-moi de lire, écrire, chercher ou exécuter du code.</p>
         <button type="button" class="ws-carte ws-changer">
@@ -63,10 +64,18 @@
           <span class="ws-carte-action">Changer de dossier</span>
         </button>
         <div class="suggestions">
-          <button class="sugg">📊 Analyse le projet et résume sa structure</button>
-          <button class="sugg">🐛 Cherche des bugs potentiels dans le code</button>
-          <button class="sugg">📝 Génère un README pour ce projet</button>
-          <button class="sugg">🧹 Propose des améliorations du code</button>
+          <button class="sugg" data-prompt="Analyse le projet et résume sa structure">
+            <span class="sugg-ico">📊</span><span class="sugg-txt">Analyse le projet et résume sa structure</span>
+          </button>
+          <button class="sugg" data-prompt="Cherche des bugs potentiels dans le code">
+            <span class="sugg-ico">🐛</span><span class="sugg-txt">Cherche des bugs potentiels dans le code</span>
+          </button>
+          <button class="sugg" data-prompt="Génère un README pour ce projet">
+            <span class="sugg-ico">📝</span><span class="sugg-txt">Génère un README pour ce projet</span>
+          </button>
+          <button class="sugg" data-prompt="Propose des améliorations du code">
+            <span class="sugg-ico">🧹</span><span class="sugg-txt">Propose des améliorations du code</span>
+          </button>
         </div>
       </div>
     </div>
@@ -151,7 +160,7 @@
 <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/dompurify@3/dist/purify.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
-<script src="{{ url_for('static', filename='script.js') }}?v=9"></script>
+<script src="{{ url_for('static', filename='script.js') }}?v=10"></script>
 
 </body>
 </html>

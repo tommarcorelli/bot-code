@@ -732,7 +732,7 @@ voileConv.addEventListener("click", fermerConvMobile);
 document.addEventListener("click", (e) => {
   const sugg = e.target.closest(".sugg");
   if (sugg) {
-    input.value = sugg.textContent.replace(/^\S+\s/, "");
+    input.value = sugg.dataset.prompt || sugg.textContent.replace(/^\S+\s/, "").trim();
     envoyer();
     return;
   }
@@ -1120,6 +1120,15 @@ window.addEventListener("drop", (e) => {
   }
 });
 
+// Salutation selon l'heure sur l'écran d'accueil (touche « dashboard » CasaOS).
+function majSalut() {
+  const el = document.getElementById("salut");
+  if (!el) return;
+  const h = new Date().getHours();
+  el.textContent = (h < 6 ? "Bonne nuit" : h < 12 ? "Bonjour"
+    : h < 18 ? "Bon après-midi" : "Bonsoir") + " 👋";
+}
+majSalut();
 demarrer();
 
 /* ===== PWA : enregistrement du service worker ===== */
