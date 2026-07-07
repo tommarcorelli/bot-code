@@ -1396,100 +1396,14 @@ def api_conversation_modifier(cid):
 
 
 # ---------------------------------------------------------------------------
-# Routes : Git
+# Routes : explorateur de fichiers (suit le dossier de travail)
 # ---------------------------------------------------------------------------
-
-def git(ws, *arguments):
-    try:
-        return subprocess.run(["git"] + list(arguments), cwd=ws,
-                              capture_output=True, text=True, timeout=30)
-    except FileNotFoundError:
-        return None  # git absent du PATH
-    except subprocess.TimeoutExpired:
-        return None
-
 
 def ws_requete():
     """Dossier de travail passé en paramètre d'URL (routes GET)."""
     ws = request.args.get("ws")
     return ws if ws and os.path.isdir(ws) else BASE_DIR
 
-
-@app.route("/api/git/statut")
-def api_git_statut():
-    ws = ws_requete()
-    r = git(ws, "rev-parse", "--is-inside-work-tree")
-    if r is None:
-        return jsonify({"erreur": "git introuvable sur cette machine"}), 500
-    if r.returncode != 0 or "true" not in r.stdout:
-        return jsonify({"repo": False})
-    branche = (git(ws, "branch", "--show-current") or r).stdout.strip() or "(détaché)"
-    porcelain = git(ws, "status", "--porcelain")
-    fichiers = []
-    for ligne in (porcelain.stdout if porcelain else "").splitlines():
-        if len(ligne) > 3:
-            fichiers.append({"etat": ligne[:2].strip() or "??", "chemin": ligne[3:].strip()})
-    return jsonify({"repo": True, "branche": branche, "fichiers": fichiers})
-
-
-@app.route("/api/git/diff")
-def api_git_diff():
-    ws = ws_requete()
-    chemin = request.args.get("chemin")
-    arguments = ["diff", "HEAD"]
-    if chemin:
-        arguments += ["--", chemin]
-    r = git(ws, *arguments)
-    if r is None or r.returncode != 0:
-        r = git(ws, "diff") if not chemin else git(ws, "diff", "--", chemin)
-    return jsonify({"diff": (r.stdout if r else "") or ""})
-
-
-@app.route("/api/git/commit", methods=["POST"])
-def api_git_commit():
-    donnees = request.json or {}
-    ws = donnees.get("ws")
-    ws = ws if ws and os.path.isdir(ws) else BASE_DIR
-    message = (donnees.get("message") or "").strip()
-    if not message:
-        return jsonify({"erreur": "Message de commit vide"}), 400
-    r = git(ws, "add", "-A")
-    if r is None or r.returncode != 0:
-        return jsonify({"erreur": (r.stderr if r else "git add impossible")}), 400
-    r = git(ws, "commit", "-m", message)
-    if r is None or r.returncode != 0:
-        return jsonify({"erreur": (r.stderr or r.stdout if r else "commit impossible").strip()}), 400
-    return jsonify({"ok": True, "sortie": r.stdout.strip()})
-
-
-@app.route("/api/git/restaurer", methods=["POST"])
-def api_git_restaurer():
-    donnees = request.json or {}
-    ws = donnees.get("ws")
-    ws = ws if ws and os.path.isdir(ws) else BASE_DIR
-    chemin = donnees.get("chemin")
-    if not chemin:
-        return jsonify({"erreur": "Chemin manquant"}), 400
-    r = git(ws, "checkout", "HEAD", "--", chemin)
-    if r is None or r.returncode != 0:
-        return jsonify({"erreur": (r.stderr if r else "restauration impossible").strip()}), 400
-    return jsonify({"ok": True})
-
-
-@app.route("/api/git/init", methods=["POST"])
-def api_git_init():
-    donnees = request.json or {}
-    ws = donnees.get("ws")
-    ws = ws if ws and os.path.isdir(ws) else BASE_DIR
-    r = git(ws, "init")
-    if r is None or r.returncode != 0:
-        return jsonify({"erreur": (r.stderr if r else "git init impossible").strip()}), 400
-    return jsonify({"ok": True})
-
-
-# ---------------------------------------------------------------------------
-# Routes : explorateur de fichiers (suit le dossier de travail)
-# ---------------------------------------------------------------------------
 
 def chemin_sur(base, rel):
     """Résout un chemin relatif et garantit qu'il reste dans `base`."""

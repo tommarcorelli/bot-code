@@ -1,7 +1,7 @@
 // Service worker : rend l'appli installable et met en cache le "shell".
 // Stratégie réseau d'abord : on ne sert JAMAIS un vieux CSS/JS si le réseau
 // est disponible (le cache ne sert qu'en mode hors-ligne).
-const CACHE = "agent-code-v7";
+const CACHE = "agent-code-v8";
 const SHELL = [
   "/",
   "/static/style.css",

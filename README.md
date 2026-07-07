@@ -13,7 +13,7 @@ installable comme une appli (PWA), y compris sur le téléphone.
 ## Installation (une seule fois)
 
 Double-clique sur **`installer.bat`**. Il crée l'environnement Python, installe
-les dépendances et pose deux raccourcis sur ton bureau.
+les dépendances et pose **une** icône **Cortex** sur ton bureau.
 
 Puis copie `.env.example` en `.env` et mets au moins ta clé Mistral :
 
@@ -34,17 +34,18 @@ n'apparaissent tout simplement pas dans la liste.
 
 ## Lancer l'agent
 
-**Double-clique sur l'icône « Agent de Code » de ton bureau.** Le serveur démarre
+**Double-clique sur l'icône « Cortex » de ton bureau.** Le serveur démarre
 sans fenêtre et le navigateur s'ouvre tout seul. Plus besoin d'aller cliquer sur
 un `.bat` dans le dossier.
 
-Pour **arrêter** : le bouton **⏻** en haut à droite de l'interface.
+Une seule icône suffit : elle sert **à la fois sur ce PC et pour le téléphone**
+(l'accès Wi-Fi est intégré). Pour **arrêter** : le bouton **⏻** en haut à droite
+de l'interface.
 
 | Je veux… | Je lance… |
 |---|---|
-| L'utiliser sur ce PC | Icône **« Agent de Code »** |
-| L'utiliser aussi sur le téléphone | Icône **« Agent de Code (Wi-Fi) »** |
-| Voir la console / les logs | `lancer.bat` (local) ou `lancer-wifi.bat` (téléphone) |
+| L'utiliser (PC et/ou téléphone) | Icône **« Cortex »** |
+| Voir la console / les logs | `lancer.bat` |
 
 ---
 
@@ -55,7 +56,7 @@ l'écran d'accueil, plein écran, sans barre de navigateur). À savoir : c'est u
 **télécommande** de l'agent qui tourne sur ton PC. Le PC doit donc être allumé et
 sur le **même Wi-Fi** (l'agent travaille sur *tes fichiers*, qui sont sur le PC).
 
-1. Lance l'icône **« Agent de Code (Wi-Fi) »** sur le PC.
+1. Lance l'icône **« Cortex »** sur le PC.
 2. Dans l'interface, clique le bouton **📱** : un **QR code** s'affiche.
 3. Scanne-le avec le téléphone (même Wi-Fi). L'appli s'ouvre.
 4. Menu du navigateur → **« Ajouter à l'écran d'accueil »**. Tu obtiens une
@@ -104,7 +105,6 @@ protégée par un **jeton d'accès** généré au premier lancement (stocké dan
 - **Confirmation** : écriture, remplacement, suppression, renommage et commandes
   shell demandent ton feu vert (avec un aperçu du *diff* pour les fichiers).
 - **Annulation** : le bouton ↩ sur une action restaure le fichier d'avant.
-- **Git** intégré (bouton ⎇) : statut, diff, commit, restauration, `git init`.
 - **Pièces jointes** : glisse-dépose des fichiers dans la fenêtre pour les
   ajouter au dossier de travail.
 
@@ -128,21 +128,20 @@ protégée par un **jeton d'accès** généré au premier lancement (stocké dan
 
 ```
 bot-code/
-├── app.py              serveur Flask : routes, tours de modèle, outils, git, sécurité
+├── app.py              serveur Flask : routes, tours de modèle, outils, sécurité
 ├── tools_web.py        outils fichiers (confinés au dossier de travail) + tests couverts
 ├── agent_mistral.py    version CLI minimale (démo pédagogique, hors interface web)
 ├── templates/index.html
 ├── static/
-│   ├── script.js       front (chat, streaming, explorateur, git, PWA, jeton)
+│   ├── script.js       front (chat, streaming, explorateur, PWA, jeton)
 │   ├── style.css       design system
 │   ├── sw.js           service worker (PWA installable)
 │   ├── manifest.json   manifeste PWA (+ icônes maskables)
 │   └── icon-*.png
 ├── tests/              py -m unittest discover -s tests
-├── installer.bat       installation + raccourcis bureau
-├── Demarrer-agent.vbs  lancement sans console (local)
-├── Demarrer-agent-wifi.vbs   lancement sans console (accès téléphone)
-├── lancer.bat / lancer-wifi.bat   lancement avec console
+├── installer.bat       installation + icône bureau
+├── Demarrer-agent.vbs  lancement sans console (PC + accès téléphone)
+├── lancer.bat          lancement avec console (logs)
 └── requirements.txt
 ```
 

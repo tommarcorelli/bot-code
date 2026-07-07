@@ -2,14 +2,14 @@
 <html lang="fr">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>Cortex — Agent de Code</title>
 
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/atom-one-dark.min.css">
-<link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}?v=6">
+<link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}?v=8">
 
 <!-- PWA -->
 <link rel="manifest" href="{{ url_for('static', filename='manifest.json') }}">
@@ -27,18 +27,7 @@
 
 <header>
   <button id="toggle-conv" title="Conversations">☰</button>
-  <div class="logo">
-    <svg viewBox="0 0 64 64" width="26" height="26" aria-hidden="true">
-      <defs>
-        <linearGradient id="lgo" x1="0" y1="0" x2="1" y2="1">
-          <stop offset="0" stop-color="#7c5cff"/><stop offset="1" stop-color="#22d3ee"/>
-        </linearGradient>
-      </defs>
-      <path d="M22 20 L10 32 L22 44" fill="none" stroke="url(#lgo)" stroke-width="6" stroke-linecap="round" stroke-linejoin="round"/>
-      <path d="M42 20 L54 32 L42 44" fill="none" stroke="url(#lgo)" stroke-width="6" stroke-linecap="round" stroke-linejoin="round"/>
-      <path d="M36 12 L27 34 L33 34 L28 52 L39 29 L33 29 Z" fill="#f0b429"/>
-    </svg>
-  </div>
+  <div class="logo"><img src="{{ url_for('static', filename='icon-192.png') }}" alt="Cortex" class="logo-orbe"></div>
   <div class="titre-zone">
     <span class="t">Cortex</span>
     <span class="s">agent de code · IA</span>
@@ -46,7 +35,6 @@
 
   <button id="ws-btn" title="Choisir le dossier de travail">📂 <span id="ws-nom">…</span> ▾</button>
   <select id="modele" title="Modèle"></select>
-  <button id="git-btn" title="Git : statut, diff, commit">⎇ Git</button>
 
   <div id="tokens" title="Tokens consommés (entrée / sortie)"></div>
   <button id="btn-phone" title="Ouvrir sur le téléphone">📱</button>
@@ -66,18 +54,7 @@
   <main>
     <div id="chat">
       <div class="vide" id="accueil">
-        <div class="grand-logo">
-          <svg viewBox="0 0 64 64" width="64" height="64" aria-hidden="true">
-            <defs>
-              <linearGradient id="lga" x1="0" y1="0" x2="1" y2="1">
-                <stop offset="0" stop-color="#7c5cff"/><stop offset="1" stop-color="#22d3ee"/>
-              </linearGradient>
-            </defs>
-            <path d="M22 20 L10 32 L22 44" fill="none" stroke="url(#lga)" stroke-width="6" stroke-linecap="round" stroke-linejoin="round"/>
-            <path d="M42 20 L54 32 L42 44" fill="none" stroke="url(#lga)" stroke-width="6" stroke-linecap="round" stroke-linejoin="round"/>
-            <path d="M36 12 L27 34 L33 34 L28 52 L39 29 L33 29 Z" fill="#f0b429"/>
-          </svg>
-        </div>
+        <div class="grand-logo"><img src="{{ url_for('static', filename='icon-192.png') }}" alt="Cortex" class="logo-orbe"></div>
         <h2>Prêt à coder</h2>
         <p>Voici le dossier dans lequel l'agent travaille. Change-le quand tu veux, puis demande-moi de lire, écrire, chercher ou exécuter du code.</p>
         <button type="button" class="ws-carte ws-changer">
@@ -158,33 +135,6 @@
   </div>
 </div>
 
-<!-- Panneau Git -->
-<div id="modal-git" class="modal">
-  <div class="m-fenetre">
-    <div class="m-entete">
-      <span>⎇ Git · <span id="g-branche">…</span></span>
-      <div class="m-actions">
-        <button id="g-rafraichir" title="Rafraîchir">⟳</button>
-        <button class="m-fermer">✕</button>
-      </div>
-    </div>
-    <div class="m-corps">
-      <div id="g-non-repo" style="display:none">
-        <p>Ce dossier n'est pas un dépôt Git.</p>
-        <button id="g-init">Initialiser (git init)</button>
-      </div>
-      <div id="g-contenu">
-        <div id="g-fichiers"></div>
-        <div id="g-diff"></div>
-      </div>
-    </div>
-    <div class="m-pied" id="g-pied">
-      <input id="g-message" placeholder="Message de commit…">
-      <button id="g-commit">✓ Commit</button>
-    </div>
-  </div>
-</div>
-
 <!-- Accès téléphone -->
 <div id="modal-phone" class="modal">
   <div class="m-fenetre etroite">
@@ -201,7 +151,7 @@
 <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/dompurify@3/dist/purify.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
-<script src="{{ url_for('static', filename='script.js') }}?v=6"></script>
+<script src="{{ url_for('static', filename='script.js') }}?v=8"></script>
 
 </body>
 </html>

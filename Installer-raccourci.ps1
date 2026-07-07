@@ -15,10 +15,12 @@ function Nouveau-Raccourci($nom, $cibleVbs, $desc) {
   Write-Host "  Cree : $nom.lnk"
 }
 
-Write-Host "Creation des raccourcis sur le bureau..."
-Nouveau-Raccourci "Cortex"         "Demarrer-agent.vbs"      "Lance Cortex (ce PC uniquement)"
-Nouveau-Raccourci "Cortex (Wi-Fi)" "Demarrer-agent-wifi.vbs" "Lance Cortex avec l'acces telephone (meme Wi-Fi)"
+# Nettoie l'ancien raccourci Wi-Fi s'il traine (fusionne dans une seule icone).
+$ancien = Join-Path $bureau "Cortex (Wi-Fi).lnk"
+if (Test-Path $ancien) { Remove-Item $ancien -Force; Write-Host "  Supprime : Cortex (Wi-Fi).lnk (fusionne)" }
+
+Write-Host "Creation du raccourci sur le bureau..."
+Nouveau-Raccourci "Cortex" "Demarrer-agent.vbs" "Lance Cortex (PC + acces telephone sur le meme Wi-Fi)"
 Write-Host ""
-Write-Host "Termine. Deux icones sont sur ton bureau :"
-Write-Host "  - Cortex          -> usage sur ce PC"
-Write-Host "  - Cortex (Wi-Fi)  -> quand tu veux aussi l'ouvrir sur le telephone"
+Write-Host "Termine. Une seule icone Cortex est sur ton bureau."
+Write-Host "  Elle sert a la fois sur ce PC et pour le telephone (bouton 📱)."

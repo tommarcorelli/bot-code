@@ -1,9 +1,13 @@
 @echo off
+chcp 65001 >nul
 title Cortex - Agent de Code
 cd /d "%~dp0"
+REM Ecoute reseau local : PC en 127.0.0.1, telephone via l'IP LAN (bouton phone).
+set HOST=0.0.0.0
 echo ================================================
-echo   Demarrage de l'Agent de Code...
+echo   Demarrage de Cortex...
 echo   Le navigateur va s'ouvrir automatiquement.
+echo   Telephone : bouton phone dans l'interface (meme Wi-Fi).
 echo   Ferme cette fenetre (ou Ctrl+C) pour arreter.
 echo ================================================
 echo.

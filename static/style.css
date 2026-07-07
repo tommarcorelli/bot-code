@@ -927,3 +927,158 @@ header::after {
   .titre-zone .t { font-size: 15px; white-space: nowrap; }
   #ws-btn { max-width: 104px; }
 }
+
+/* ============================================================
+   Refonte v7 — « Verre premium »
+   Couche finale : vrai glassmorphism + correctif d'affichage
+   mobile (100dvh + safe-area) + logo unifié avec l'icône.
+   Placée en fin de fichier pour primer sur les règles du dessus.
+   ============================================================ */
+
+/* --- Correctif hauteur mobile : 100vh déborde sous la barre du
+   navigateur sur iOS/Android. 100dvh suit la zone réellement visible. --- */
+html, body { height: 100dvh; }
+
+/* --- Profondeur : fond maillé multi-dégradés sous l'aurora --- */
+body {
+  background:
+    radial-gradient(1100px 720px at 12% -8%, rgba(124, 92, 255, 0.16), transparent 60%),
+    radial-gradient(1000px 680px at 88% 8%, rgba(34, 211, 238, 0.12), transparent 58%),
+    radial-gradient(900px 700px at 50% 118%, rgba(232, 121, 249, 0.10), transparent 60%),
+    var(--bg);
+}
+
+/* --- Verre : partout où on floute, on ajoute le préfixe -webkit-
+   (obligatoire pour que le flou s'affiche sur iPhone / Safari) et on
+   sature légèrement pour le rendu « givré premium ». --- */
+header,
+#input-zone,
+#conversations,
+.rangee.ia .bulle,
+#explorateur,
+.modal,
+.m-fenetre {
+  -webkit-backdrop-filter: blur(24px) saturate(160%);
+  backdrop-filter: blur(24px) saturate(160%);
+}
+
+header {
+  padding-top: calc(12px + env(safe-area-inset-top, 0px));
+  background: linear-gradient(180deg, rgba(20, 24, 40, 0.72), rgba(14, 17, 30, 0.55));
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+  box-shadow: 0 1px 0 rgba(255, 255, 255, 0.05) inset, 0 10px 30px -18px rgba(0, 0, 0, 0.6);
+}
+
+/* --- Logo unifié : le conteneur devient transparent et laisse l'orbe
+   (icon-192.png, même image que l'icône du bureau/PWA) respirer, avec
+   un halo lumineux au lieu d'une boîte. Fini « pas le même logo ». --- */
+.logo,
+.grand-logo {
+  background: none;
+  border: none;
+  box-shadow: none;
+  overflow: visible;
+}
+.logo-orbe {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  filter: drop-shadow(0 4px 14px rgba(124, 92, 255, 0.55))
+          drop-shadow(0 2px 8px rgba(34, 211, 238, 0.35));
+}
+.grand-logo { width: 104px; height: 104px; }
+.grand-logo .logo-orbe {
+  filter: drop-shadow(0 12px 34px rgba(124, 92, 255, 0.55))
+          drop-shadow(0 6px 20px rgba(34, 211, 238, 0.35));
+  animation: flotte 5.5s ease-in-out infinite;
+}
+@keyframes flotte { 0%, 100% { transform: translateY(0); } 50% { transform: translateY(-7px); } }
+
+/* --- Bulles IA : verre plus prononcé + liseré lumineux interne --- */
+.rangee.ia .bulle {
+  background: linear-gradient(180deg, rgba(30, 35, 56, 0.62), rgba(18, 22, 38, 0.5));
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  box-shadow: 0 1px 0 rgba(255, 255, 255, 0.06) inset, var(--ombre);
+}
+.rangee.moi .bulle {
+  background: linear-gradient(135deg, #7a5cff, #9b5cf6 55%, #22d3ee 180%);
+}
+
+/* --- Pilule de saisie : verre + halo --- */
+.saisie {
+  background: linear-gradient(180deg, rgba(20, 24, 40, 0.7), rgba(12, 15, 26, 0.82));
+  -webkit-backdrop-filter: blur(16px) saturate(150%);
+  backdrop-filter: blur(16px) saturate(150%);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  box-shadow: 0 1px 0 rgba(255, 255, 255, 0.05) inset, 0 12px 30px -20px rgba(0, 0, 0, 0.7);
+}
+#input-zone {
+  background: linear-gradient(0deg, rgba(14, 17, 30, 0.72), rgba(14, 17, 30, 0.42));
+  border-top: 1px solid rgba(255, 255, 255, 0.07);
+  /* Correctif mobile : la barre système du bas ne recouvre plus la saisie */
+  padding-bottom: calc(18px + env(safe-area-inset-bottom, 0px));
+}
+
+/* --- Pilules du header (dossier / modèle) : verre léger --- */
+#ws-btn, #modele, #tokens {
+  background: rgba(255, 255, 255, 0.05);
+  -webkit-backdrop-filter: blur(10px);
+  backdrop-filter: blur(10px);
+}
+
+/* --- Boutons ronds du header : relief doux --- */
+#toggle-fichiers, #toggle-conv, #btn-phone, #btn-quitter, #joindre {
+  box-shadow: 0 1px 0 rgba(255, 255, 255, 0.05) inset;
+}
+
+/* --- Modales & drawer : verre profond --- */
+.modal { background: rgba(6, 8, 15, 0.62); }
+.m-fenetre {
+  background: linear-gradient(180deg, rgba(22, 26, 42, 0.92), rgba(13, 16, 26, 0.94));
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  box-shadow: var(--ombre-forte), 0 1px 0 rgba(255, 255, 255, 0.06) inset;
+}
+#explorateur {
+  background: linear-gradient(180deg, rgba(18, 22, 36, 0.9), rgba(12, 15, 26, 0.94));
+  border-left: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+/* ============================================================
+   Mobile — affichage réel téléphone (le point douloureux)
+   ============================================================ */
+@media (max-width: 900px) {
+  /* Les drawers partent tout en haut et gèrent l'encoche + la barre du bas */
+  #explorateur, #voile-exp { top: 0; }
+  #explorateur {
+    padding-top: env(safe-area-inset-top, 0px);
+    width: min(360px, 92vw);
+  }
+  #conversations {
+    padding-top: calc(12px + env(safe-area-inset-top, 0px));
+    padding-bottom: calc(12px + env(safe-area-inset-bottom, 0px));
+  }
+
+  /* Chat : marges latérales resserrées, respire mieux sur petit écran */
+  #chat { padding: 18px 14px; gap: 14px; }
+  .bulle { max-width: 88%; font-size: 15px; }
+  .confirmation { max-width: 92%; }
+
+  /* Suggestions d'accueil sur une colonne (2 colonnes = trop serré) */
+  .suggestions { grid-template-columns: 1fr; }
+
+  /* Modales : plein écran, sans grosse marge qui rogne le contenu */
+  .modal { padding: 0; }
+  .m-fenetre, .m-fenetre.etroite {
+    width: 100%; height: 100dvh; max-height: 100dvh;
+    border-radius: 0; border: none;
+  }
+  .m-entete { padding-top: calc(12px + env(safe-area-inset-top, 0px)); }
+  .m-corps { padding-bottom: calc(14px + env(safe-area-inset-bottom, 0px)); }
+  .m-pied { padding-bottom: calc(12px + env(safe-area-inset-bottom, 0px)); }
+
+  /* QR : reste confortable */
+  .phone-qr { width: min(240px, 70vw); height: min(240px, 70vw); }
+
+  /* Cibles tactiles un peu plus grandes */
+  #envoyer, #joindre { width: 44px; height: 44px; }
+}
