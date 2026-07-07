@@ -1,13 +1,27 @@
 :root {
-  --bg: #0a0b12;
-  --panel: rgba(22, 25, 37, 0.65);
-  --border: rgba(255, 255, 255, 0.08);
-  --text: #e7e9f0;
-  --muted: #8b90a5;
+  --bg: #070912;
+  --bg2: #0b0e1a;
+  --panel: rgba(24, 28, 44, 0.60);
+  --panel-solide: #10131f;
+  --surface: rgba(255, 255, 255, 0.04);
+  --surface-fort: rgba(255, 255, 255, 0.07);
+  --border: rgba(255, 255, 255, 0.09);
+  --border-fort: rgba(255, 255, 255, 0.15);
+  --text: #eaecf5;
+  --muted: #9096ad;
   --accent: #7c5cff;
   --accent2: #22d3ee;
-  --user: linear-gradient(135deg, #6d5cff, #8b5cf6);
+  --accent3: #e879f9;
+  --amber: #f0b429;
+  --ok: #22c55e;
+  --danger: #f87171;
+  --user: linear-gradient(135deg, #6d5cff, #9b5cf6);
+  --degrade: linear-gradient(135deg, var(--accent), var(--accent2));
   --radius: 16px;
+  --radius-sm: 10px;
+  --ombre: 0 10px 30px rgba(0, 0, 0, 0.35);
+  --ombre-forte: 0 24px 60px rgba(0, 0, 0, 0.5);
+  --glow: 0 0 0 1px rgba(124, 92, 255, 0.35), 0 8px 30px rgba(124, 92, 255, 0.28);
 }
 * { box-sizing: border-box; }
 html, body { height: 100%; }
@@ -770,4 +784,146 @@ main { flex: 1; display: flex; flex-direction: column; min-width: 0; }
   .suggestions { grid-template-columns: 1fr; }
   .bulle, .confirmation { max-width: 88%; }
   .modal { padding: 12px; }
+}
+
+
+/* ============================================================= *
+ *  Refonte v6 — polish visuel + nouveaux composants             *
+ * ============================================================= */
+
+/* Fond : dégradés profonds + vignette, posés par-dessus l'aurora */
+body {
+  background:
+    radial-gradient(1200px 800px at 12% -12%, rgba(124, 92, 255, 0.12), transparent 55%),
+    radial-gradient(1000px 720px at 100% -5%, rgba(34, 211, 238, 0.09), transparent 52%),
+    linear-gradient(180deg, var(--bg2), var(--bg));
+}
+
+/* Header : hairline dégradé sous la barre + halo du logo au survol */
+header { position: relative; }
+header::after {
+  content: ""; position: absolute; left: 0; right: 0; bottom: -1px; height: 1px;
+  background: linear-gradient(90deg, transparent, rgba(124, 92, 255, 0.5),
+              rgba(34, 211, 238, 0.5), transparent);
+  opacity: 0.55; pointer-events: none;
+}
+.logo { transition: transform 0.3s, box-shadow 0.3s; }
+.logo:hover { transform: translateY(-1px) rotate(-4deg); box-shadow: 0 8px 26px rgba(124, 92, 255, 0.55); }
+
+/* Boutons carrés du header : téléphone + arrêt, alignés sur les autres */
+#btn-phone, #btn-quitter {
+  width: 38px; height: 38px; flex: none;
+  border-radius: 11px; border: 1px solid var(--border);
+  background: var(--surface); color: var(--text); font-size: 16px; cursor: pointer;
+  display: grid; place-items: center;
+  transition: background 0.2s, border-color 0.2s, transform 0.12s, color 0.2s;
+}
+#btn-phone:hover { background: rgba(34, 211, 238, 0.16); border-color: rgba(34, 211, 238, 0.5); }
+#btn-quitter { color: var(--muted); }
+#btn-quitter:hover { background: rgba(248, 113, 113, 0.16); border-color: rgba(248, 113, 113, 0.5); color: #fca5a5; }
+#btn-phone:active, #btn-quitter:active { transform: scale(0.92); }
+
+/* Utilitaire */
+.muet { color: var(--muted); }
+
+/* Bulles & avatars : relief plus soigné */
+.rangee.ia .bulle { box-shadow: var(--ombre); }
+.rangee.moi .bulle { box-shadow: 0 10px 28px rgba(124, 92, 255, 0.32); }
+.avatar { box-shadow: 0 4px 14px rgba(0, 0, 0, 0.35); }
+.avatar.ia { box-shadow: 0 5px 18px rgba(124, 92, 255, 0.45); }
+
+/* Saisie & envoi : focus et halo plus marqués */
+.saisie:focus-within {
+  border-color: rgba(124, 92, 255, 0.7);
+  box-shadow: 0 0 0 4px rgba(124, 92, 255, 0.14), var(--ombre);
+}
+#envoyer { box-shadow: 0 6px 18px rgba(124, 92, 255, 0.4); }
+.sugg { transition: background .2s, border-color .2s, transform .12s, box-shadow .2s; }
+.sugg:hover { box-shadow: var(--ombre); }
+
+/* --- Explorateur : navigateur de disque (barre + pied) --- */
+#explorateur { width: 320px; box-shadow: -20px 0 50px rgba(0, 0, 0, 0.4); }
+.exp-barre {
+  display: flex; align-items: center; gap: 8px;
+  padding: 8px 10px; border-bottom: 1px solid var(--border);
+  background: rgba(255, 255, 255, 0.02); flex: none;
+}
+#exp-parent {
+  flex: none; width: 30px; height: 30px; border-radius: 8px;
+  border: 1px solid var(--border); background: var(--surface);
+  color: var(--text); cursor: pointer; font-size: 14px;
+  display: grid; place-items: center; transition: background .2s, opacity .2s;
+}
+#exp-parent:hover:not(:disabled) { background: rgba(124, 92, 255, 0.18); }
+#exp-parent:disabled { opacity: 0.3; cursor: default; }
+#exp-chemin {
+  flex: 1; min-width: 0;
+  font-family: 'JetBrains Mono', monospace; font-size: 11.5px; color: var(--accent2);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.exp-pied { flex: none; padding: 10px; border-top: 1px solid var(--border); background: rgba(255, 255, 255, 0.02); }
+#exp-travailler {
+  width: 100%; padding: 10px; border: none; border-radius: 10px;
+  font-family: inherit; font-size: 12.5px; font-weight: 700; cursor: pointer;
+  background: var(--degrade); color: #fff; transition: filter .2s, opacity .2s;
+}
+#exp-travailler:hover:not(:disabled) { filter: brightness(1.12); }
+#exp-travailler:disabled { opacity: 0.4; cursor: default; }
+.ligne .nom { flex: 1; min-width: 0; }
+.ligne.fichier .nom { font-weight: 400; }
+.ligne .exp-badge {
+  flex: none; font-size: 9.5px; font-weight: 700; text-transform: uppercase; letter-spacing: .5px;
+  padding: 2px 6px; border-radius: 999px;
+  background: rgba(240, 180, 41, 0.16); color: var(--amber);
+}
+
+/* --- Modale téléphone --- */
+#phone-corps { align-items: center; text-align: center; gap: 14px; }
+.phone-msg { margin: 0; font-size: 14px; color: var(--text); }
+.phone-aide { margin: 0; font-size: 12.5px; color: var(--muted); line-height: 1.55; }
+.phone-aide code, .phone-url code { font-family: 'JetBrains Mono', monospace; }
+.phone-qr {
+  width: 224px; height: 224px; padding: 12px; border-radius: 16px;
+  background: #fff; box-shadow: var(--ombre); display: grid; place-items: center;
+}
+.phone-qr svg { width: 100%; height: 100%; display: block; }
+.phone-url {
+  display: flex; align-items: center; gap: 8px; width: 100%;
+  background: var(--panel-solide); border: 1px solid var(--border); border-radius: 10px;
+  padding: 8px 8px 8px 14px;
+}
+.phone-url code {
+  flex: 1; min-width: 0; font-size: 12px; color: var(--accent2);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; text-align: left;
+}
+#phone-copier {
+  flex: none; padding: 7px 14px; border: none; border-radius: 8px;
+  font-family: inherit; font-size: 12.5px; font-weight: 700; cursor: pointer;
+  background: var(--degrade); color: #fff;
+}
+#phone-copier:hover { filter: brightness(1.1); }
+
+/* --- Écran « serveur arrêté » --- */
+.ecran-off { display: grid; place-items: center; height: 100vh; text-align: center; color: var(--muted); padding: 20px; }
+.ecran-off h2 { color: var(--text); margin: 6px 0; }
+.ecran-off p { max-width: 320px; }
+.ecran-off-ico { font-size: 46px; }
+
+@media (max-width: 900px) {
+  .phone-qr { width: 200px; height: 200px; }
+  #explorateur { width: min(340px, 88vw); }
+  /* En-tête : 📱 et ⏻ sont des actions « côté PC », on les masque sur mobile
+     pour désencombrer (le QR s'obtient depuis le PC de toute façon). */
+  #btn-phone, #btn-quitter { display: none; }
+  header { gap: 9px; padding: 12px 14px; }
+  /* Filet anti-débordement horizontal */
+  html, body { overflow-x: hidden; }
+  /* En flex-column, .vide (margin:auto) se dimensionne sur le contenu non-wrappé
+     (max-content) et déborde : on le force à la largeur du conteneur. */
+  .vide { width: 100%; max-width: 100%; }
+  .ws-carte { flex-wrap: wrap; }
+  .ws-carte-txt { min-width: 0; }
+  .ws-carte-action { margin-left: auto; }
+  .titre-zone .t { font-size: 15px; white-space: nowrap; }
+  #ws-btn { max-width: 104px; }
 }

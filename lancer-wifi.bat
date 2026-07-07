@@ -1,15 +1,15 @@
 @echo off
-title Cortex - Agent de Code
+chcp 65001 >nul
+title Cortex - Wi-Fi (telephone)
 cd /d "%~dp0"
+set HOST=0.0.0.0
 echo ================================================
-echo   Demarrage de l'Agent de Code...
-echo   Le navigateur va s'ouvrir automatiquement.
+echo   Agent de Code - acces telephone (meme Wi-Fi)
+echo   Le lien pour le telephone s'affiche ci-dessous.
 echo   Ferme cette fenetre (ou Ctrl+C) pour arreter.
 echo ================================================
 echo.
-REM Ouvre le navigateur apres 2s, le temps que le serveur demarre
 start "" cmd /c "timeout /t 2 /nobreak >nul & start http://127.0.0.1:5000"
-REM Lance le serveur Flask (bloque tant que le serveur tourne)
 venv\Scripts\python.exe app.py
 echo.
 echo Serveur arrete.

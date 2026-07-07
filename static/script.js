@@ -1,3 +1,43 @@
+/* ===== Jeton d'accès (sécurité) =====
+   L'API exige un jeton. Sur le PC il est récupéré automatiquement ; sur le
+   téléphone il arrive via le lien http://IP:5000/?cle=… puis est mémorisé. */
+let CLE = localStorage.getItem("agent_cle") || "";
+(function initCle() {
+  const params = new URLSearchParams(location.search);
+  const depuisUrl = params.get("cle");
+  if (depuisUrl) {
+    CLE = depuisUrl;
+    localStorage.setItem("agent_cle", CLE);
+    params.delete("cle");
+    const reste = params.toString();
+    history.replaceState(null, "", location.pathname + (reste ? "?" + reste : ""));
+  }
+})();
+
+const fetchNatif = window.fetch.bind(window);
+window.fetch = function (url, opts) {
+  const u = typeof url === "string" ? url : (url && url.url) || "";
+  if (u.startsWith("/api/")) {
+    opts = Object.assign({}, opts);
+    opts.headers = Object.assign({}, opts.headers, { "X-Cle": CLE });
+  }
+  return fetchNatif(url, opts);
+};
+
+// Récupère le jeton auprès du serveur si on ne l'a pas (marche seulement en local, sur le PC).
+async function assurerCle() {
+  if (CLE) return true;
+  try {
+    const r = await fetchNatif("/api/cle-locale");
+    if (r.ok) {
+      CLE = (await r.json()).cle;
+      localStorage.setItem("agent_cle", CLE);
+      return true;
+    }
+  } catch (e) { /* réseau indisponible */ }
+  return false;
+}
+
 const chatDiv = document.getElementById("chat");
 const input = document.getElementById("message");
 const boutonEnvoyer = document.getElementById("envoyer");
@@ -468,7 +508,7 @@ function appliquerConv(data) {
   if (data.workspace) {
     wsActuel = data.workspace;
     majDossierPartout();
-    arbreCharge = false;  // l'explorateur suivra le nouveau dossier
+    rafraichirExplorateurSiOuvert();  // l'explorateur suit le nouveau dossier
   }
   if (data.modele && selectModele.querySelector(`option[value="${data.modele}"]`)) {
     selectModele.value = data.modele;
@@ -614,7 +654,7 @@ document.getElementById("d-choisir").addEventListener("click", async () => {
   if (!dossierCourant) { toast("Choisis un dossier (pas la liste des lecteurs)"); return; }
   wsActuel = dossierCourant;
   majDossierPartout();
-  arbreCharge = false;
+  rafraichirExplorateurSiOuvert();
   await patchConv({ workspace: wsActuel });
   await fetch("/api/config", {
     method: "POST",
@@ -742,6 +782,15 @@ document.getElementById("g-commit").addEventListener("click", async () => {
 /* ===== Démarrage ===== */
 
 async function demarrer() {
+  if (!(await assurerCle())) {
+    // Ni clé mémorisée, ni accès local : c'est un appareil distant sans le lien complet.
+    chatDiv.innerHTML =
+      '<div class="vide"><h2>🔒 Accès protégé</h2>' +
+      '<p>Pour ouvrir l\'agent sur cet appareil, utilise le lien complet ' +
+      '<b>http://IP:5000/?cle=…</b> affiché sur le PC ' +
+      '(bouton <b>📱 Téléphone</b> dans l\'en-tête).</p></div>';
+    return;
+  }
   await chargerModeles();
   try {
     const resConfig = await fetch("/api/config");
@@ -804,12 +853,16 @@ document.addEventListener("click", (e) => {
   if (e.target.closest(".ws-changer")) ouvrirModalDossier();
 });
 
-/* ===== Explorateur de fichiers ===== */
+/* ===== Explorateur de fichiers (navigateur de disque) ===== */
 const explorateur = document.getElementById("explorateur");
 const voileExp = document.getElementById("voile-exp");
 const arbre = document.getElementById("arbre");
+const expChemin = document.getElementById("exp-chemin");
+const expParent = document.getElementById("exp-parent");
+const expTravailler = document.getElementById("exp-travailler");
 const visionneuse = document.getElementById("visionneuse");
-let arbreCharge = false;
+let cheminExplore = null;   // chemin absolu courant ; null = jamais ouvert ; "" = liste des lecteurs
+let parentExplore = null;   // chemin du parent (null = on est déjà à la racine)
 
 function iconeFichier(nom) {
   const ext = nom.split(".").pop().toLowerCase();
@@ -819,65 +872,100 @@ function iconeFichier(nom) {
   return m[ext] || "📄";
 }
 
-async function chargerDossier(rel, conteneur) {
-  conteneur.innerHTML = '<div class="ligne" style="color:var(--muted)">chargement…</div>';
+function sansSlash(p) { return (p || "").replace(/[\\/]+$/, ""); }
+
+async function chargerExplorateur(chemin) {
+  arbre.innerHTML = '<div class="ligne muet">chargement…</div>';
   try {
-    const res = await fetch("/api/arborescence?dossier=" + encodeURIComponent(rel) +
-                            "&ws=" + encodeURIComponent(wsActuel));
+    const res = await fetch("/api/parcourir?chemin=" + encodeURIComponent(chemin || ""));
     const data = await res.json();
-    conteneur.innerHTML = "";
-    if (data.erreur) { conteneur.innerHTML = '<div class="ligne">' + data.erreur + '</div>'; return; }
-    if (!data.entrees.length) { conteneur.innerHTML = '<div class="ligne" style="color:var(--muted)">(vide)</div>'; return; }
-    data.entrees.forEach((e) => conteneur.appendChild(creerNoeud(e)));
+    if (data.erreur) { arbre.innerHTML = '<div class="ligne muet">⚠️ ' + data.erreur + '</div>'; return; }
+    cheminExplore = data.chemin;
+    parentExplore = data.parent === null ? null : (data.parent || "");
+    expChemin.textContent = data.chemin || "💻 Poste de travail";
+    expChemin.title = data.chemin || "Lecteurs du PC";
+    expParent.disabled = (parentExplore === null);
+    expTravailler.disabled = !data.chemin;
+    arbre.innerHTML = "";
+    if (!data.entrees.length) { arbre.innerHTML = '<div class="ligne muet">(dossier vide)</div>'; return; }
+    data.entrees.forEach((e) => arbre.appendChild(ligneExplorateur(e)));
   } catch (e) {
-    conteneur.innerHTML = '<div class="ligne">Erreur de chargement</div>';
+    arbre.innerHTML = '<div class="ligne muet">Erreur de chargement</div>';
   }
 }
 
-function creerNoeud(e) {
-  const noeud = document.createElement("div");
+function ligneExplorateur(e) {
   const ligne = document.createElement("div");
   ligne.className = "ligne " + e.type;
-
+  const estWs = e.type === "dossier" && wsActuel &&
+    sansSlash(e.chemin).toLowerCase() === sansSlash(wsActuel).toLowerCase();
   const ico = document.createElement("span");
   ico.className = "ico";
-  ico.textContent = e.type === "dossier" ? "📁" : iconeFichier(e.nom);
+  ico.textContent = e.type === "dossier" ? (estWs ? "📌" : "📁") : iconeFichier(e.nom);
   const nom = document.createElement("span");
   nom.className = "nom";
   nom.textContent = e.nom;
   ligne.appendChild(ico);
   ligne.appendChild(nom);
-  noeud.appendChild(ligne);
-
-  if (e.type === "dossier") {
-    const enfants = document.createElement("div");
-    enfants.className = "enfants";
-    enfants.style.display = "none";
-    let charge = false;
-    ligne.onclick = async () => {
-      const ferme = enfants.style.display === "none";
-      enfants.style.display = ferme ? "block" : "none";
-      ico.textContent = ferme ? "📂" : "📁";
-      if (ferme && !charge) { await chargerDossier(e.chemin, enfants); charge = true; }
-    };
-    noeud.appendChild(enfants);
-  } else {
-    ligne.onclick = () => ouvrirFichier(e.chemin);
+  if (estWs) {
+    const badge = document.createElement("span");
+    badge.className = "exp-badge";
+    badge.textContent = "travail";
+    ligne.appendChild(badge);
   }
-  return noeud;
+  if (e.type === "dossier") ligne.onclick = () => chargerExplorateur(e.chemin);
+  else ligne.onclick = () => apercuEntree(e.chemin, e.nom);
+  return ligne;
+}
+
+// Un fichier situé dans le dossier de travail est éditable ; ailleurs, lecture seule.
+function apercuEntree(abs, nom) {
+  const racine = sansSlash(wsActuel).toLowerCase();
+  if (racine && abs.toLowerCase().startsWith(racine + "\\")) {
+    ouvrirFichier(abs.slice(sansSlash(wsActuel).length + 1).replace(/\\/g, "/"));
+  } else {
+    ouvrirApercu(abs, nom);
+  }
 }
 
 function basculerExplorateur() {
   const ouvert = explorateur.classList.toggle("ouvert");
   voileExp.classList.toggle("ouvert", ouvert);
-  if (ouvert && !arbreCharge) { chargerDossier("", arbre); arbreCharge = true; }
+  if (ouvert) chargerExplorateur(cheminExplore == null ? (wsActuel || "") : cheminExplore);
 }
+
+function rafraichirExplorateur() {
+  chargerExplorateur(cheminExplore == null ? (wsActuel || "") : cheminExplore);
+}
+
+function rafraichirExplorateurSiOuvert() {
+  if (explorateur.classList.contains("ouvert")) rafraichirExplorateur();
+}
+
+expParent.addEventListener("click", () => {
+  if (parentExplore !== null) chargerExplorateur(parentExplore);
+});
+expTravailler.addEventListener("click", async () => {
+  if (!cheminExplore) return;
+  wsActuel = cheminExplore;
+  majDossierPartout();
+  await patchConv({ workspace: wsActuel });
+  await fetch("/api/config", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ workspace: wsActuel }),
+  });
+  toast("📌 Dossier de travail : " + basename(wsActuel));
+  chargerExplorateur(cheminExplore);  // re-render pour afficher le badge « travail »
+});
 
 /* ===== Visionneuse / éditeur ===== */
 let fichierOuvert = null;
 let contenuOuvert = "";
+let lectureSeule = false;   // vrai pour un fichier hors du dossier de travail
 const btnModifier = visionneuse.querySelector(".v-modifier");
 const btnEnregistrer = visionneuse.querySelector(".v-enregistrer");
+const btnTelecharger = visionneuse.querySelector(".v-telecharger");
 
 function afficherLecture() {
   const corps = visionneuse.querySelector(".v-corps");
@@ -892,7 +980,7 @@ function afficherLecture() {
   wrap.appendChild(pre);
   corps.appendChild(wrap);
   hljs.highlightElement(code);
-  btnModifier.style.display = "";
+  btnModifier.style.display = lectureSeule ? "none" : "";
   btnEnregistrer.style.display = "none";
 }
 
@@ -933,8 +1021,10 @@ async function ouvrirFichier(rel) {
   const corps = visionneuse.querySelector(".v-corps");
   titre.textContent = rel;
   corps.innerHTML = '<div style="color:var(--muted);padding:8px">chargement…</div>';
+  lectureSeule = false;
   btnModifier.style.display = "none";
   btnEnregistrer.style.display = "none";
+  btnTelecharger.style.display = "";
   visionneuse.classList.add("ouvert");
   try {
     const res = await fetch("/api/fichier?chemin=" + encodeURIComponent(rel) +
@@ -945,6 +1035,36 @@ async function ouvrirFichier(rel) {
       return;
     }
     fichierOuvert = rel;
+    contenuOuvert = data.contenu;
+    afficherLecture();
+    visionneuse.querySelector(".v-copier").onclick = () => {
+      navigator.clipboard.writeText(contenuOuvert);
+      toast("Copié ✓");
+    };
+  } catch (e) {
+    corps.innerHTML = '<div style="color:#f87171;padding:8px">Erreur de chargement</div>';
+  }
+}
+
+// Aperçu lecture seule d'un fichier hors du dossier de travail (chemin absolu).
+async function ouvrirApercu(abs, nom) {
+  const titre = visionneuse.querySelector(".v-titre");
+  const corps = visionneuse.querySelector(".v-corps");
+  titre.textContent = "🔒 " + nom;
+  corps.innerHTML = '<div style="color:var(--muted);padding:8px">chargement…</div>';
+  lectureSeule = true;
+  fichierOuvert = null;   // hors workspace : ni édition ni téléchargement
+  btnModifier.style.display = "none";
+  btnEnregistrer.style.display = "none";
+  btnTelecharger.style.display = "none";
+  visionneuse.classList.add("ouvert");
+  try {
+    const res = await fetch("/api/apercu?chemin=" + encodeURIComponent(abs));
+    const data = await res.json();
+    if (data.erreur) {
+      corps.innerHTML = '<div style="color:#f87171;padding:8px">' + data.erreur + '</div>';
+      return;
+    }
     contenuOuvert = data.contenu;
     afficherLecture();
     visionneuse.querySelector(".v-copier").onclick = () => {
@@ -968,8 +1088,66 @@ visionneuse.querySelector(".v-telecharger").addEventListener("click", () => {
   a.remove();
 });
 document.getElementById("toggle-fichiers").addEventListener("click", basculerExplorateur);
-document.getElementById("rafraichir").addEventListener("click", () => chargerDossier("", arbre));
+document.getElementById("rafraichir").addEventListener("click", rafraichirExplorateur);
 voileExp.addEventListener("click", basculerExplorateur);
+
+/* ===== Accès téléphone ===== */
+const modalPhone = document.getElementById("modal-phone");
+async function ouvrirPhone() {
+  const corps = document.getElementById("phone-corps");
+  corps.innerHTML = '<p class="phone-msg muet">chargement…</p>';
+  modalPhone.classList.add("ouvert");
+  let data;
+  try {
+    data = await (await fetch("/api/reseau")).json();
+  } catch (e) { corps.innerHTML = '<p class="phone-msg">Erreur réseau.</p>'; return; }
+  if (!data.ip) {
+    corps.innerHTML = '<p class="phone-msg">Impossible de détecter l\'adresse réseau du PC. ' +
+      'Vérifie que le Wi-Fi est activé.</p>';
+    return;
+  }
+  if (!data.ouvert_reseau) {
+    corps.innerHTML =
+      '<p class="phone-msg">Le serveur n\'écoute pas encore sur le réseau local.</p>' +
+      '<p class="phone-aide">Ferme l\'agent (⏻), puis relance-le avec le raccourci ' +
+      '<b>« Agent de Code (Wi-Fi) »</b> ou le fichier <code>lancer-wifi.bat</code> : ' +
+      'il activera l\'accès téléphone. Reviens ensuite ici pour le QR code.</p>';
+    return;
+  }
+  corps.innerHTML =
+    '<p class="phone-msg">Sur ton téléphone (<b>même Wi-Fi</b>), scanne ce QR code ' +
+    'ou tape l\'adresse :</p>' +
+    '<div id="phone-qr" class="phone-qr"></div>' +
+    '<div class="phone-url"><code id="phone-url-txt"></code>' +
+    '<button id="phone-copier" title="Copier le lien">Copier</button></div>' +
+    '<p class="phone-aide">Puis, dans le menu du navigateur, choisis ' +
+    '« Ajouter à l\'écran d\'accueil » pour l\'installer comme une vraie appli. ' +
+    'Le lien contient ta clé d\'accès — garde-le pour toi.</p>';
+  document.getElementById("phone-url-txt").textContent = data.url;
+  document.getElementById("phone-copier").onclick = () => {
+    navigator.clipboard.writeText(data.url);
+    toast("Lien copié ✓");
+  };
+  try {
+    const r = await fetch("/api/qr?url=" + encodeURIComponent(data.url));
+    const qr = document.getElementById("phone-qr");
+    if (r.ok) qr.innerHTML = await r.text();
+    else qr.style.display = "none";
+  } catch (e) {
+    document.getElementById("phone-qr").style.display = "none";
+  }
+}
+document.getElementById("btn-phone").addEventListener("click", ouvrirPhone);
+
+/* ===== Arrêt du serveur ===== */
+document.getElementById("btn-quitter").addEventListener("click", async () => {
+  if (!confirm("Arrêter le serveur de l'agent ?")) return;
+  try { await fetch("/api/quitter", { method: "POST" }); } catch (e) { /* le serveur coupe */ }
+  document.body.innerHTML =
+    '<div class="ecran-off"><div><div class="ecran-off-ico">⏻</div>' +
+    '<h2>Serveur arrêté</h2><p>Tu peux fermer cet onglet. ' +
+    'Relance l\'agent avec l\'icône du bureau.</p></div></div>';
+});
 
 /* Fermeture générique des modales (croix, clic sur le fond, Échap) */
 document.querySelectorAll(".modal").forEach((modal) => {
@@ -1018,7 +1196,7 @@ async function televerser(fichiers) {
       fichiersJoints.push(data.chemin);
       p.el.dataset.chemin = data.chemin;
       p.etat.textContent = "✓";
-      arbreCharge = false;  // le fichier apparaîtra dans l'explorateur au prochain ouverture
+      rafraichirExplorateurSiOuvert();  // le fichier apparaît dans l'explorateur
     } catch (e) {
       p.el.remove();
       toast("⚠️ Téléversement échoué");

@@ -176,3 +176,47 @@ def supprimer_fichier(chemin: str, base: str = ".") -> str:
         return f"Fichier {chemin} supprimé"
     except Exception as e:
         return f"Erreur : {e}"
+
+
+def renommer(source: str, destination: str, base: str = ".") -> str:
+    """Renomme ou déplace un fichier/dossier à l'intérieur du dossier de travail."""
+    src = resoudre(base, source)
+    dst = resoudre(base, destination)
+    if src is None or dst is None:
+        return ERREUR_SORTIE
+    if not os.path.exists(src):
+        return f"Erreur : {source} n'existe pas"
+    if os.path.exists(dst):
+        return f"Erreur : {destination} existe déjà (déplacement annulé)"
+    try:
+        parent = os.path.dirname(dst)
+        if parent:
+            os.makedirs(parent, exist_ok=True)
+        os.rename(src, dst)
+        return f"{source} → {destination}"
+    except Exception as e:
+        return f"Erreur : {e}"
+
+
+def lire_extrait(chemin: str, debut: int = 1, lignes: int = 200, base: str = ".") -> str:
+    """Lit une portion d'un fichier : `lignes` lignes à partir de la ligne `debut`
+    (1 = première ligne). Pour explorer un gros fichier sans tout charger."""
+    cible = resoudre(base, chemin)
+    if cible is None:
+        return ERREUR_SORTIE
+    try:
+        with open(cible, "r", encoding="utf-8") as f:
+            toutes = f.readlines()
+    except Exception as e:
+        return f"Erreur : {e}"
+    total = len(toutes)
+    try:
+        debut = max(1, int(debut))
+        lignes = max(1, int(lignes))
+    except (TypeError, ValueError):
+        return "Erreur : « debut » et « lignes » doivent être des entiers"
+    portion = toutes[debut - 1:debut - 1 + lignes]
+    if not portion:
+        return f"(aucune ligne à partir de {debut} : le fichier compte {total} ligne(s))"
+    fin = debut + len(portion) - 1
+    return f"[lignes {debut}–{fin} sur {total}]\n" + "".join(portion)

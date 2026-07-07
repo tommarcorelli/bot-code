@@ -3,13 +3,13 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Devstral · Agent de Code</title>
+<title>Cortex — Agent de Code</title>
 
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/atom-one-dark.min.css">
-<link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}?v=5">
+<link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}?v=6">
 
 <!-- PWA -->
 <link rel="manifest" href="{{ url_for('static', filename='manifest.json') }}">
@@ -17,7 +17,7 @@
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-<meta name="apple-mobile-web-app-title" content="Agent Code">
+<meta name="apple-mobile-web-app-title" content="Cortex">
 <link rel="apple-touch-icon" href="{{ url_for('static', filename='icon-192.png') }}">
 <link rel="icon" type="image/png" href="{{ url_for('static', filename='icon-192.png') }}">
 </head>
@@ -40,8 +40,8 @@
     </svg>
   </div>
   <div class="titre-zone">
-    <span class="t">Agent de Code</span>
-    <span class="s">streaming · function calling</span>
+    <span class="t">Cortex</span>
+    <span class="s">agent de code · IA</span>
   </div>
 
   <button id="ws-btn" title="Choisir le dossier de travail">📂 <span id="ws-nom">…</span> ▾</button>
@@ -49,7 +49,9 @@
   <button id="git-btn" title="Git : statut, diff, commit">⎇ Git</button>
 
   <div id="tokens" title="Tokens consommés (entrée / sortie)"></div>
+  <button id="btn-phone" title="Ouvrir sur le téléphone">📱</button>
   <button id="toggle-fichiers" title="Explorateur de fichiers">📁</button>
+  <button id="btn-quitter" title="Arrêter le serveur">⏻</button>
 </header>
 
 <div id="app">
@@ -107,13 +109,20 @@
 
 </div>
 
-<!-- Explorateur de fichiers (drawer) -->
+<!-- Explorateur de fichiers (drawer) — navigateur de disque complet -->
 <aside id="explorateur">
   <div class="exp-entete">
-    <span>📂 Fichiers</span>
+    <span>🗂️ Explorateur</span>
     <button id="rafraichir" title="Rafraîchir">⟳</button>
   </div>
+  <div class="exp-barre">
+    <button id="exp-parent" title="Dossier parent">⬆</button>
+    <div id="exp-chemin" title="Dossier courant">…</div>
+  </div>
   <div id="arbre"></div>
+  <div class="exp-pied">
+    <button id="exp-travailler" title="Faire de ce dossier le dossier de travail de l'agent">📌 Travailler ici</button>
+  </div>
 </aside>
 <div id="voile-exp"></div>
 
@@ -176,12 +185,23 @@
   </div>
 </div>
 
+<!-- Accès téléphone -->
+<div id="modal-phone" class="modal">
+  <div class="m-fenetre etroite">
+    <div class="m-entete">
+      <span>📱 Ouvrir sur le téléphone</span>
+      <div class="m-actions"><button class="m-fermer">✕</button></div>
+    </div>
+    <div class="m-corps" id="phone-corps"></div>
+  </div>
+</div>
+
 <div id="toast"></div>
 
 <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/dompurify@3/dist/purify.min.js"></script>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
-<script src="{{ url_for('static', filename='script.js') }}?v=5"></script>
+<script src="{{ url_for('static', filename='script.js') }}?v=6"></script>
 
 </body>
 </html>

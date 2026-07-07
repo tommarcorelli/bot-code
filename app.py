@@ -1,18 +1,28 @@
 import os
 import re
+import sys
 import json
 import time
 import uuid
 import shutil
+import socket
 import difflib
+import secrets
 import subprocess
 import urllib.request
-from flask import Flask, render_template, request, jsonify, send_from_directory, send_file, Response
+from flask import Flask, render_template, request, jsonify, send_from_directory, send_file, Response, abort
 from werkzeug.utils import secure_filename
 from mistralai.client import Mistral
 from openai import OpenAI
 from dotenv import load_dotenv
 import tools_web as tools
+
+# Lancé sans console (raccourci -> pythonw.exe), sys.stdout/stderr valent None :
+# le moindre print() ferait planter le serveur. On les redirige vers le vide.
+if sys.stdout is None:
+    sys.stdout = open(os.devnull, "w", encoding="utf-8")
+if sys.stderr is None:
+    sys.stderr = open(os.devnull, "w", encoding="utf-8")
 
 load_dotenv()
 
@@ -49,7 +59,8 @@ DOSSIERS_IGNORES = {".git", "venv", "__pycache__", ".idea", "node_modules",
                     ".env", "conversations", "sauvegardes"}
 
 # Outils qui exigent une confirmation de l'utilisateur avant exécution.
-OUTILS_SENSIBLES = {"ecrire_fichier", "remplacer_texte", "executer_commande", "supprimer_fichier"}
+OUTILS_SENSIBLES = {"ecrire_fichier", "remplacer_texte", "executer_commande",
+                    "supprimer_fichier", "renommer"}
 # Outils dont l'effet peut être annulé (sauvegarde du fichier avant exécution).
 OUTILS_ANNULABLES = {"ecrire_fichier", "remplacer_texte", "supprimer_fichier"}
 
@@ -90,10 +101,11 @@ SYSTEM_PROMPT = (
     "Tu es un agent de développement expert. "
     "Tu travailles dans le dossier de travail choisi par l'utilisateur, sous Windows "
     "(executer_commande passe par cmd.exe, les chemins sont relatifs à ce dossier). "
-    "Méthode : explore d'abord (lister_fichiers, lire_fichier, chercher_texte), "
-    "puis agis, puis vérifie ton travail. "
+    "Méthode : explore d'abord (lister_fichiers, lire_fichier — ou lire_extrait pour "
+    "les gros fichiers, chercher_texte), puis agis, puis vérifie ton travail. "
     "Pour modifier un fichier existant, préfère remplacer_texte (modification ciblée) "
-    "à ecrire_fichier (réécriture complète). N'invente jamais le contenu d'un fichier : lis-le. "
+    "à ecrire_fichier (réécriture complète). Pour déplacer ou renommer, utilise renommer. "
+    "N'invente jamais le contenu d'un fichier : lis-le. "
     "Réponds en français, de façon concise, en Markdown ; cite les fichiers que tu modifies."
 )
 
@@ -204,6 +216,37 @@ outils_definitions = [
             }
         }
     },
+    {
+        "type": "function",
+        "function": {
+            "name": "renommer",
+            "description": "Renomme ou déplace un fichier/dossier dans le dossier de travail",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "source": {"type": "string"},
+                    "destination": {"type": "string"}
+                },
+                "required": ["source", "destination"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "lire_extrait",
+            "description": "Lit une portion d'un fichier (à partir de la ligne 'debut', 'lignes' lignes). Idéal pour parcourir un gros fichier sans tout charger.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "chemin": {"type": "string"},
+                    "debut": {"type": "integer"},
+                    "lignes": {"type": "integer"}
+                },
+                "required": ["chemin"]
+            }
+        }
+    },
 ]
 
 fonctions_disponibles = {
@@ -215,6 +258,8 @@ fonctions_disponibles = {
     "chercher_texte": tools.chercher_texte,
     "creer_dossier": tools.creer_dossier,
     "supprimer_fichier": tools.supprimer_fichier,
+    "renommer": tools.renommer,
+    "lire_extrait": tools.lire_extrait,
 }
 
 # État global (usage local mono-utilisateur).
@@ -244,6 +289,58 @@ def sauver_config(config):
             json.dump(config, f, ensure_ascii=False, indent=1)
     except Exception as e:
         print(f"[config] Échec sauvegarde : {e}")
+
+
+# ---------------------------------------------------------------------------
+# Sécurité : jeton d'accès partagé
+# ---------------------------------------------------------------------------
+# L'agent lit/écrit des fichiers et lance des commandes shell. Dès qu'on expose
+# le serveur au réseau local (pour l'ouvrir sur le téléphone), il faut un
+# garde-fou. Un jeton est généré une fois puis conservé dans config.json et
+# exigé sur toutes les routes /api. Le PC (127.0.0.1) peut le récupérer
+# automatiquement ; le téléphone le reçoit via le lien http://IP:5000/?cle=<jeton>.
+
+def obtenir_cle():
+    config = charger_config()
+    cle = config.get("cle")
+    if not cle:
+        cle = secrets.token_urlsafe(24)
+        config["cle"] = cle
+        sauver_config(config)
+    return cle
+
+
+CLE_API = obtenir_cle()
+
+# Routes servies sans jeton : le shell de l'appli et la remise du jeton en local.
+CHEMINS_LIBRES = {"/", "/sw.js", "/api/cle-locale"}
+
+
+def est_local():
+    """Vrai si la requête vient de la machine elle-même (pas du réseau)."""
+    return (request.remote_addr or "").split("%")[0] in ("127.0.0.1", "::1", "localhost")
+
+
+@app.before_request
+def controle_acces():
+    chemin = request.path
+    if not chemin.startswith("/api/") or chemin in CHEMINS_LIBRES:
+        return  # shell, static, sw, remise du jeton : libres
+    recue = request.headers.get("X-Cle") or request.args.get("cle")
+    if not recue or not secrets.compare_digest(recue, CLE_API):
+        abort(403)
+
+
+def ip_locale():
+    """Adresse IP de la machine sur le réseau local (pour l'accès téléphone)."""
+    try:
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        s.connect(("8.8.8.8", 80))  # aucune donnée envoyée, juste pour lire l'IP source
+        ip = s.getsockname()[0]
+        s.close()
+        return ip
+    except Exception:
+        return None
 
 
 # ---------------------------------------------------------------------------
@@ -781,6 +878,9 @@ def tour_modele(conv):
 
 def cible_outil(nom, args):
     """Petit libellé affiché dans la chip d'activité du front."""
+    if nom == "renommer":
+        src, dst = args.get("source") or "", args.get("destination") or ""
+        return f"{src} → {dst}" if src or dst else ""
     return (args.get("chemin") or args.get("commande")
             or args.get("motif") or args.get("dossier") or "")
 
@@ -1104,6 +1204,125 @@ def api_dossiers():
 
 
 # ---------------------------------------------------------------------------
+# Navigateur de disque (explorateur libre) + accès réseau
+# ---------------------------------------------------------------------------
+
+@app.route("/api/parcourir")
+def api_parcourir():
+    """Parcourt n'importe quel chemin absolu du disque : dossiers ET fichiers
+    (la liste des lecteurs si le chemin est vide). Sert l'explorateur, qui
+    permet de se balader partout sur le PC — indépendamment du dossier de
+    travail de l'agent (lui reste confiné, voir tools_web.resoudre)."""
+    chemin = request.args.get("chemin", "")
+    if not chemin:
+        lecteurs = [f"{lettre}:\\" for lettre in "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+                    if os.path.exists(f"{lettre}:\\")]
+        return jsonify({"chemin": "", "parent": None, "racine": True,
+                        "entrees": [{"nom": l, "chemin": l, "type": "dossier"} for l in lecteurs]})
+    chemin = os.path.abspath(chemin)
+    if not os.path.isdir(chemin):
+        return jsonify({"erreur": "Dossier invalide"}), 400
+    dossiers, fichiers = [], []
+    try:
+        for nom in sorted(os.listdir(chemin), key=str.lower):
+            if nom.startswith("$") or nom == "System Volume Information":
+                continue
+            complet = os.path.join(chemin, nom)
+            try:
+                (dossiers if os.path.isdir(complet) else fichiers).append(
+                    {"nom": nom, "chemin": complet,
+                     "type": "dossier" if os.path.isdir(complet) else "fichier"})
+            except OSError:
+                continue
+    except PermissionError:
+        return jsonify({"erreur": "Accès refusé"}), 403
+    depouille = chemin.rstrip("\\/")
+    parent = os.path.dirname(depouille)
+    if not parent or parent == depouille:
+        parent = ""  # racine d'un lecteur : remonter vers la liste des lecteurs
+    return jsonify({"chemin": chemin, "parent": parent, "racine": False,
+                    "entrees": dossiers + fichiers})
+
+
+@app.route("/api/apercu")
+def api_apercu():
+    """Aperçu lecture seule d'un fichier texte n'importe où sur le disque
+    (taille limitée). Complète /api/fichier, qui reste confiné au workspace."""
+    chemin = request.args.get("chemin", "")
+    if not chemin or not os.path.isfile(chemin):
+        return jsonify({"erreur": "Fichier invalide"}), 400
+    try:
+        if os.path.getsize(chemin) > 1_000_000:
+            return jsonify({"erreur": "Fichier trop volumineux (> 1 Mo)"}), 400
+        with open(chemin, "r", encoding="utf-8") as f:
+            contenu = f.read()
+    except UnicodeDecodeError:
+        return jsonify({"erreur": "Fichier binaire, non affichable"}), 400
+    except Exception as e:
+        return jsonify({"erreur": f"Lecture impossible : {e}"}), 400
+    return jsonify({"chemin": chemin, "nom": os.path.basename(chemin), "contenu": contenu})
+
+
+@app.route("/api/cle-locale")
+def api_cle_locale():
+    """Remet le jeton d'accès, mais uniquement à la machine locale : le PC
+    n'a donc rien à saisir, le téléphone passe par le lien ?cle=…"""
+    if not est_local():
+        abort(403)
+    return jsonify({"cle": CLE_API})
+
+
+@app.route("/api/reseau")
+def api_reseau():
+    """Infos pour ouvrir l'appli sur le téléphone (même Wi-Fi)."""
+    ip = ip_locale()
+    port = int(os.getenv("PORT", "5000"))
+    ouvert = (os.getenv("HOST", "127.0.0.1") == "0.0.0.0")
+    return jsonify({
+        "ip": ip, "port": port, "ouvert_reseau": ouvert,
+        "url": f"http://{ip}:{port}/?cle={CLE_API}" if ip else None,
+    })
+
+
+@app.route("/api/qr")
+def api_qr():
+    """QR code (SVG) d'une URL, pour scanner l'accès téléphone. Généré
+    localement : aucun service tiers, la clé ne quitte pas le réseau."""
+    import io
+    url = request.args.get("url", "")
+    if not url:
+        return jsonify({"erreur": "url manquante"}), 400
+    try:
+        import qrcode
+        import qrcode.image.svg
+    except ImportError:
+        return jsonify({"erreur": "librairie qrcode non installée"}), 501
+    try:
+        img = qrcode.make(url, image_factory=qrcode.image.svg.SvgPathImage,
+                          box_size=11, border=2)
+        buf = io.BytesIO()
+        img.save(buf)
+        return Response(buf.getvalue(), mimetype="image/svg+xml")
+    except Exception as e:
+        return jsonify({"erreur": str(e)}), 500
+
+
+@app.route("/api/quitter", methods=["POST"])
+def api_quitter():
+    """Arrête le serveur (bouton ⏻ de l'interface). Réservé à la machine locale."""
+    if not est_local():
+        abort(403)
+    import threading
+
+    def _stop():
+        time.sleep(0.3)
+        os._exit(0)
+
+    threading.Thread(target=_stop, daemon=True).start()
+    return jsonify({"ok": True})
+
+
+# ---------------------------------------------------------------------------
 # Routes : conversations
 # ---------------------------------------------------------------------------
 
@@ -1389,4 +1608,21 @@ def trop_gros(_):
 migrer_ancien_historique()
 
 if __name__ == "__main__":
-    app.run(debug=True, port=5000, threaded=True)
+    hote = os.getenv("HOST", "127.0.0.1")
+    port = int(os.getenv("PORT", "5000"))
+    debug = os.getenv("DEBUG", "").lower() in ("1", "true", "on", "oui")
+    print("=" * 58)
+    print("  Cortex — serveur démarré")
+    print(f"  Sur ce PC        : http://127.0.0.1:{port}")
+    if hote == "0.0.0.0":
+        ip = ip_locale()
+        if ip:
+            print(f"  Sur le téléphone : http://{ip}:{port}/?cle={CLE_API}")
+            print("                     (même Wi-Fi ; le lien contient la clé)")
+    else:
+        print("  (réseau local off — lance avec HOST=0.0.0.0 pour le téléphone)")
+    print("=" * 58)
+    # debug=False par défaut : le débogueur Werkzeug permet d'exécuter du code
+    # arbitraire via le navigateur — à proscrire sur un outil qui touche déjà
+    # aux fichiers et au shell. Active-le au besoin avec DEBUG=1.
+    app.run(host=hote, port=port, debug=debug, threaded=True)
