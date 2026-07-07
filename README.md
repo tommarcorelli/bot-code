@@ -63,6 +63,15 @@ sur le **même Wi-Fi** (l'agent travaille sur *tes fichiers*, qui sont sur le PC
 
 Le lien contient ta **clé d'accès** : garde-le pour toi.
 
+> **Le téléphone ne se connecte pas ?** Lance une fois
+> `Ouvrir-acces-telephone.bat` (il demande les droits admin) : il ouvre le port
+> 5000 dans le pare-feu Windows et retire les règles qui bloquent `pythonw`.
+> Vérifie aussi que le téléphone est bien sur le **même Wi-Fi** que le PC.
+>
+> **« Via GitHub » ne marche pas** — c'est normal : GitHub ne stocke que le
+> *code*, il ne fait pas tourner l'appli. Cortex tourne sur ton PC ; le
+> téléphone s'y connecte par le lien Wi-Fi ci-dessus.
+
 > Pour l'utiliser **hors de chez toi** (4G, autre réseau), il faudrait exposer le
 > serveur via un tunnel (Cloudflare Tunnel, ngrok…) — possible grâce à la clé
 > d'accès, mais non couvert ici.
