@@ -2,8 +2,7 @@
 chcp 65001 >nul
 title Cortex - Agent de Code
 cd /d "%~dp0"
-REM Ecoute reseau local : PC en 127.0.0.1, telephone via l'IP LAN (bouton phone).
-set HOST=0.0.0.0
+REM Serveur local uniquement. Pour l'acces telephone : set HOST=0.0.0.0
 echo ================================================
 echo   Demarrage de Cortex...
 echo   Le navigateur va s'ouvrir automatiquement.

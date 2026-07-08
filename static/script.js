@@ -510,8 +510,16 @@ function appliquerConv(data) {
     majDossierPartout();
     rafraichirExplorateurSiOuvert();  // l'explorateur suit le nouveau dossier
   }
-  if (data.modele && selectModele.querySelector(`option[value="${data.modele}"]`)) {
-    selectModele.value = data.modele;
+  if (data.modele) {
+    if (selectModele.querySelector(`option[value="${data.modele}"]`)) {
+      selectModele.value = data.modele;
+    } else if (selectModele.value) {
+      // Le modèle mémorisé n'existe plus (retiré du catalogue) : on rebascule
+      // la conversation sur le modèle actuellement sélectionné.
+      patchConv({ modele: selectModele.value });
+      toast("⚠️ Modèle indisponible, remplacé par " +
+        selectModele.selectedOptions[0].textContent);
+    }
   }
 }
 
@@ -1130,6 +1138,11 @@ function majSalut() {
 }
 majSalut();
 demarrer();
+
+/* Signe de vie : tant qu'un onglet est ouvert, le serveur reste en vie.
+   Onglet fermé -> plus de pings -> le serveur s'éteint tout seul au bout
+   de quelques minutes (plus de serveurs fantômes en arrière-plan). */
+setInterval(() => { fetch("/api/ping").catch(() => {}); }, 25000);
 
 /* ===== PWA : enregistrement du service worker ===== */
 if ("serviceWorker" in navigator) {

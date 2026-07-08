@@ -16,10 +16,11 @@ If Not fso.FileExists(python) Then
          vbExclamation, "Cortex"
   WScript.Quit
 End If
-' Ecoute reseau local : le PC accede en 127.0.0.1, le telephone via
-' l'IP LAN (bouton 📱 → QR code). L'API reste protegee par le jeton.
-sh.Environment("PROCESS")("HOST") = "0.0.0.0"
+' Serveur local uniquement (127.0.0.1). Pour l'acces telephone, decommenter :
+' sh.Environment("PROCESS")("HOST") = "0.0.0.0"
 ' Demarre le serveur, fenetre masquee (0), sans attendre la fin.
+' (Si un serveur tourne deja, app.py s'arrete aussitot : pas de doublon,
+'  le navigateur s'ouvre simplement sur l'instance existante.)
 sh.Run """" & python & """ """ & app & """", 0, False
 ' Laisse le serveur demarrer, puis ouvre le navigateur.
 WScript.Sleep 2500

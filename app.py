@@ -7,6 +7,7 @@ import uuid
 import shutil
 import socket
 import difflib
+import hashlib
 import secrets
 import subprocess
 import urllib.request
@@ -66,10 +67,12 @@ OUTILS_ANNULABLES = {"ecrire_fichier", "remplacer_texte", "supprimer_fichier"}
 
 MODELE_DEFAUT = "mistral:devstral-latest"
 MODELES_MISTRAL = [
-    {"id": "mistral:devstral-latest", "nom": "Devstral · code (défaut)"},
-    {"id": "mistral:mistral-small-latest", "nom": "Mistral Small · rapide"},
+    {"id": "mistral:devstral-latest", "nom": "Devstral · agent de code (recommandé)"},
     {"id": "mistral:mistral-large-latest", "nom": "Mistral Large · puissant"},
-    {"id": "mistral:codestral-latest", "nom": "Codestral · code"},
+    {"id": "mistral:mistral-small-latest", "nom": "Mistral Small · rapide"},
+    # Codestral est un modèle de complétion : il « décrit » plus qu'il n'agit
+    # et refait volontiers la même micro-modification en boucle.
+    {"id": "mistral:codestral-latest", "nom": "Codestral · complétion (déconseillé en agent)"},
 ]
 OLLAMA_URL = os.getenv("OLLAMA_URL", "http://localhost:11434")
 
@@ -78,11 +81,12 @@ OLLAMA_URL = os.getenv("OLLAMA_URL", "http://localhost:11434")
 # pour rester robuste si un modèle est renommé ou déprécié.
 GROQ_CANDIDATS = [
     ("llama-3.3-70b-versatile", "Llama 3.3 70B · Groq (gratuit)"),
+    ("openai/gpt-oss-120b", "GPT-OSS 120B · Groq (puissant)"),
+    ("meta-llama/llama-4-scout-17b-16e-instruct", "Llama 4 Scout · Groq"),
     ("llama-3.1-8b-instant", "Llama 3.1 8B · Groq (rapide)"),
-    ("qwen-2.5-32b", "Qwen 2.5 32B · Groq"),
-    ("deepseek-r1-distill-llama-70b", "DeepSeek R1 70B · Groq"),
 ]
-GROQ_EXCLUS = ("whisper", "tts", "guard", "distil", "embed", "vision")
+GROQ_EXCLUS = ("whisper", "tts", "guard", "distil", "embed", "vision",
+               "orpheus", "compound", "allam")
 
 GEMINI_CANDIDATS = [
     ("gemini-2.5-flash", "Gemini 2.5 Flash · Google (gratuit)"),
@@ -98,15 +102,25 @@ GEMINI_EXCLUS = ("embedding", "aqa", "imagen", "tts", "learnlm",
 SEUIL_COMPACTION = 150_000
 
 SYSTEM_PROMPT = (
-    "Tu es un agent de développement expert. "
+    "Tu es un agent de développement expert et autonome. "
     "Tu travailles dans le dossier de travail choisi par l'utilisateur, sous Windows "
-    "(executer_commande passe par cmd.exe, les chemins sont relatifs à ce dossier). "
-    "Méthode : explore d'abord (lister_fichiers, lire_fichier — ou lire_extrait pour "
-    "les gros fichiers, chercher_texte), puis agis, puis vérifie ton travail. "
-    "Pour modifier un fichier existant, préfère remplacer_texte (modification ciblée) "
-    "à ecrire_fichier (réécriture complète). Pour déplacer ou renommer, utilise renommer. "
-    "N'invente jamais le contenu d'un fichier : lis-le. "
-    "Réponds en français, de façon concise, en Markdown ; cite les fichiers que tu modifies."
+    "(executer_commande passe par cmd.exe, les chemins sont relatifs à ce dossier).\n"
+    "Méthode : explore (lister_fichiers, lire_fichier — ou lire_extrait pour les gros "
+    "fichiers, chercher_texte), puis agis, puis vérifie en relisant ce que tu as modifié.\n"
+    "Choix de l'outil d'édition : correction ponctuelle → remplacer_texte ; refonte, "
+    "nouveau fichier ou changements étendus → ecrire_fichier avec le contenu COMPLET. "
+    "N'invente jamais le contenu d'un fichier : lis-le d'abord. "
+    "Pour déplacer ou renommer, utilise renommer.\n"
+    "Avant de réécrire un fichier CSS, lis les fichiers HTML qui l'utilisent et couvre "
+    "TOUTES leurs classes et ids (nav, boutons, mise en page comprise) — un style qui "
+    "ignore les classes existantes casse la page.\n"
+    "Une « refonte » ou un rendu « stylé » doit transformer visiblement le résultat "
+    "(structure de la page, fond, couleurs, mise en page) — pas seulement quelques lignes.\n"
+    "Si l'utilisateur dit que le résultat ne va pas, ne refais JAMAIS la même action : "
+    "diagnostique autrement (relis les fichiers concernés, cherche ce qui a manqué) et "
+    "change d'approche.\n"
+    "Réponds en français, concis, en Markdown ; cite les fichiers modifiés. "
+    "Ne répète jamais un résumé déjà donné."
 )
 
 outils_definitions = [
@@ -321,8 +335,16 @@ def est_local():
     return (request.remote_addr or "").split("%")[0] in ("127.0.0.1", "::1", "localhost")
 
 
+# Horodatage de la dernière activité (requête ou événement streamé). Sert à
+# l'arrêt automatique : sans onglet ouvert, plus personne ne parle au serveur,
+# qui finit par s'éteindre au lieu de rester fantôme en arrière-plan.
+DERNIER_SIGNE_VIE = {"t": time.time()}
+ARRET_AUTO_MIN = float(os.getenv("ARRET_AUTO_MIN", "10"))
+
+
 @app.before_request
 def controle_acces():
+    DERNIER_SIGNE_VIE["t"] = time.time()
     chemin = request.path
     if not chemin.startswith("/api/") or chemin in CHEMINS_LIBRES:
         return  # shell, static, sw, remise du jeton : libres
@@ -614,6 +636,126 @@ def compacter(conv):
 
 
 # ---------------------------------------------------------------------------
+# Normalisation de l'historique avant envoi au modèle
+# ---------------------------------------------------------------------------
+
+def normaliser_id_appel(tid):
+    """Id de tool_call au format accepté partout : 9 caractères alphanumériques
+    (exigence stricte de l'API Mistral, indifférent pour Groq/Gemini/Ollama).
+    Un id venu d'un autre fournisseur (« call_x… ») est réécrit de façon
+    stable, pour que l'appel et son résultat restent appariés."""
+    if tid and re.fullmatch(r"[a-zA-Z0-9]{9}", tid):
+        return tid
+    return hashlib.md5((tid or "").encode("utf-8")).hexdigest()[:9]
+
+
+# Signature de pensée factice documentée par Google : Gemini 3 refuse (400)
+# un appel d'outil de l'historique sans thought_signature ; cette valeur
+# précise contourne la validation pour les appels dont on n'a pas la vraie
+# signature (conversation venue d'un autre modèle, ancien historique).
+SIGNATURE_GEMINI_ABSENTE = "context_engineering_is_the_way_to_go"
+
+
+def preparer_messages(conv, compat=False, signatures=False):
+    """Copie de l'historique prête à être envoyée au modèle. L'historique
+    stocké peut contenir des restes d'un autre fournisseur (ids trop longs)
+    ou d'un stream interrompu (appel sans nom, résultat orphelin, message
+    vide) : la plupart des API les refusent avec une erreur 400. On répare
+    donc à l'envoi, sans toucher à la conversation stockée.
+    `compat` : format API compatible OpenAI (contenu vide omis — Gemini le
+    refuse parfois). `signatures` : joint les thought_signatures aux appels
+    d'outils (exigées par Gemini 3, inconnues des autres fournisseurs)."""
+    messages = [{"role": "system", "content": SYSTEM_PROMPT}]
+    attendus = []  # (id, nom) des tool_calls en attente de leur résultat
+
+    def combler():
+        for tid, nom in attendus:
+            messages.append({"role": "tool", "name": nom,
+                             "content": "Non exécuté (historique incomplet)",
+                             "tool_call_id": tid})
+        attendus.clear()
+
+    for m in conv["messages"]:
+        role = m.get("role")
+        if role == "tool":
+            tid = normaliser_id_appel(m.get("tool_call_id"))
+            if all(t != tid for t, _ in attendus):
+                continue  # résultat orphelin (son appel a été écarté)
+            attendus[:] = [(t, n) for t, n in attendus if t != tid]
+            messages.append({"role": "tool", "name": m.get("name") or "",
+                             "content": m.get("content") or "",
+                             "tool_call_id": tid})
+            continue
+        combler()  # tout résultat manquant est soldé avant le message suivant
+        if role == "assistant":
+            contenu = m.get("content") or ""
+            appels = []
+            for tc in m.get("tool_calls") or []:
+                if not tc["function"].get("name"):
+                    continue
+                appel = {"id": normaliser_id_appel(tc.get("id")), "type": "function",
+                         "function": {"name": tc["function"]["name"],
+                                      "arguments": tc["function"].get("arguments") or "{}"}}
+                if signatures:
+                    appel["extra_content"] = tc.get("extra_content") or {
+                        "google": {"thought_signature": SIGNATURE_GEMINI_ABSENTE}}
+                appels.append(appel)
+            if not contenu and not appels:
+                continue  # reste d'un stream interrompu : inutile, parfois refusé
+            msg = {"role": "assistant", "content": contenu}
+            if appels:
+                msg["tool_calls"] = appels
+                attendus.extend((a["id"], a["function"]["name"]) for a in appels)
+                if compat and not contenu:
+                    del msg["content"]  # Gemini refuse parfois un contenu vide
+            messages.append(msg)
+        else:
+            messages.append({"role": role, "content": m.get("content") or ""})
+    combler()
+    return messages
+
+
+def accumuler_delta_appel(appels, tid, idx, nom, args, extra=None):
+    """Range un fragment de tool_call streamé dans `appels`. Chaque
+    fournisseur streame à sa façon (index absent ou toujours 0, id répété,
+    appel complet d'un coup) : on rattache par id d'abord, par index sinon.
+    Un id inconnu ouvre TOUJOURS un nouvel appel — sans quoi deux appels
+    parallèles fusionnent et leurs arguments JSON, concaténés, deviennent
+    illisibles (l'outil échoue et le modèle réessaie en boucle).
+    `extra` : champ extra_content de Gemini (porte la thought_signature,
+    à conserver dans l'historique)."""
+    appel = next((a for a in appels if tid and a["id"] == tid), None)
+    if appel is None:
+        if tid or not appels:
+            appel = {"id": tid, "type": "function",
+                     "function": {"name": "", "arguments": ""}}
+            appels.append(appel)
+        elif isinstance(idx, int) and 0 <= idx < len(appels):
+            appel = appels[idx]
+        else:
+            appel = appels[-1]
+    if nom:
+        appel["function"]["name"] = nom
+    if args:
+        if not isinstance(args, str):
+            args = json.dumps(args)
+        appel["function"]["arguments"] += args
+    if isinstance(extra, dict):
+        appel["extra_content"] = extra
+
+
+def finaliser_appels(appels):
+    """Fin de stream : écarte les appels inexploitables (nom vide, laissés
+    par un arrêt en plein stream) et réécrit chaque id au format universel
+    de 9 alphanumériques pour que l'historique reste valide quel que soit
+    le modèle choisi ensuite."""
+    valides = [a for a in appels if a["function"]["name"]]
+    for a in valides:
+        a["id"] = uuid.uuid4().hex[:9]
+    return valides
+
+
+# ---------------------------------------------------------------------------
 # Tours de modèle (Mistral API et Ollama local)
 # ---------------------------------------------------------------------------
 
@@ -622,7 +764,7 @@ def tour_mistral(conv, modele):
     appels = []
     flux = client.chat.stream(
         model=modele,
-        messages=[{"role": "system", "content": SYSTEM_PROMPT}] + conv["messages"],
+        messages=preparer_messages(conv),
         tools=outils_definitions,
         tool_choice="auto",
     )
@@ -652,37 +794,23 @@ def tour_mistral(conv, modele):
         tcs = getattr(delta, "tool_calls", None)
         if isinstance(tcs, list):
             for tc in tcs:
-                idx = getattr(tc, "index", None)
-                if not isinstance(idx, int):
-                    idx = len(appels) if getattr(tc, "id", None) or not appels else len(appels) - 1
-                while len(appels) <= idx:
-                    appels.append({"id": None, "type": "function",
-                                   "function": {"name": "", "arguments": ""}})
-                a = appels[idx]
-                if getattr(tc, "id", None):
-                    a["id"] = tc.id
                 fn = getattr(tc, "function", None)
-                if fn is not None:
-                    nom = getattr(fn, "name", None)
-                    if isinstance(nom, str) and nom:
-                        a["function"]["name"] = nom
-                    args = getattr(fn, "arguments", None)
-                    if args:
-                        if not isinstance(args, str):
-                            args = json.dumps(args)
-                        a["function"]["arguments"] += args
-    for a in appels:
-        if not a["id"]:
-            a["id"] = uuid.uuid4().hex[:9]
-    return texte, appels
+                accumuler_delta_appel(
+                    appels,
+                    getattr(tc, "id", None),
+                    getattr(tc, "index", None),
+                    getattr(fn, "name", None) if fn is not None else None,
+                    getattr(fn, "arguments", None) if fn is not None else None,
+                )
+    return texte, finaliser_appels(appels)
 
 
 def messages_pour_ollama(conv):
-    """Convertit l'historique (format Mistral) vers le format Ollama."""
-    messages = [{"role": "system", "content": SYSTEM_PROMPT}]
-    for m in conv["messages"]:
-        role = m.get("role")
-        if role == "assistant" and m.get("tool_calls"):
+    """Convertit l'historique normalisé vers le format Ollama (arguments en
+    objets plutôt qu'en chaînes JSON, pas d'ids de tool_call)."""
+    messages = []
+    for m in preparer_messages(conv):
+        if m.get("tool_calls"):
             appels = []
             for tc in m["tool_calls"]:
                 try:
@@ -693,10 +821,10 @@ def messages_pour_ollama(conv):
                                             "arguments": arguments}})
             messages.append({"role": "assistant", "content": m.get("content") or "",
                              "tool_calls": appels})
-        elif role == "tool":
+        elif m["role"] == "tool":
             messages.append({"role": "tool", "content": m.get("content") or ""})
         else:
-            messages.append({"role": role, "content": m.get("content") or ""})
+            messages.append({"role": m["role"], "content": m.get("content") or ""})
     return messages
 
 
@@ -809,14 +937,15 @@ def tour_ollama(conv, modele):
     return texte, appels
 
 
-def tour_compat(client_compat, conv, modele):
+def tour_compat(client_compat, conv, modele, gemini=False):
     """Streame un tour via une API compatible OpenAI (Groq, Gemini). Même
-    contrat de sortie que tour_mistral : (texte, appels)."""
+    contrat de sortie que tour_mistral : (texte, appels). `gemini` active
+    les thought_signatures, exigées par Gemini 3 et inconnues des autres."""
     texte = ""
     appels = []
     flux = client_compat.chat.completions.create(
         model=modele,
-        messages=[{"role": "system", "content": SYSTEM_PROMPT}] + conv["messages"],
+        messages=preparer_messages(conv, compat=True, signatures=gemini),
         tools=outils_definitions,
         tool_choice="auto",
         stream=True,
@@ -837,23 +966,16 @@ def tour_compat(client_compat, conv, modele):
             texte += contenu
             yield {"type": "token", "t": contenu}
         for tc in (getattr(delta, "tool_calls", None) or []):
-            idx = tc.index if isinstance(getattr(tc, "index", None), int) else max(0, len(appels) - 1)
-            while len(appels) <= idx:
-                appels.append({"id": None, "type": "function",
-                               "function": {"name": "", "arguments": ""}})
-            a = appels[idx]
-            if getattr(tc, "id", None):
-                a["id"] = tc.id
             fn = getattr(tc, "function", None)
-            if fn is not None:
-                if getattr(fn, "name", None):
-                    a["function"]["name"] = fn.name
-                if getattr(fn, "arguments", None):
-                    a["function"]["arguments"] += fn.arguments
-    for a in appels:
-        if not a["id"]:
-            a["id"] = uuid.uuid4().hex[:9]
-    return texte, appels
+            accumuler_delta_appel(
+                appels,
+                getattr(tc, "id", None),
+                getattr(tc, "index", None),
+                getattr(fn, "name", None) if fn is not None else None,
+                getattr(fn, "arguments", None) if fn is not None else None,
+                extra=getattr(tc, "extra_content", None),
+            )
+    return texte, finaliser_appels(appels)
 
 
 def tour_modele(conv):
@@ -868,7 +990,7 @@ def tour_modele(conv):
     if fournisseur == "gemini":
         if not gemini_client:
             raise RuntimeError("Clé Gemini absente : ajoute GEMINI_API_KEY dans le .env")
-        return (yield from tour_compat(gemini_client, conv, nom))
+        return (yield from tour_compat(gemini_client, conv, nom, gemini=True))
     return (yield from tour_mistral(conv, nom or modele))
 
 
@@ -919,6 +1041,20 @@ def diff_remplacement(ws, args):
     return calculer_diff(ws, args.get("chemin"), propose)
 
 
+def deja_echoue_pareil(conv, nom, resultat):
+    """Vrai si le même outil a déjà échoué avec la même erreur depuis le
+    dernier message utilisateur. Les petits modèles ont tendance à répéter
+    l'appel raté à l'identique, indéfiniment : on casse la boucle en le
+    leur signalant dans le résultat."""
+    for m in reversed(conv["messages"]):
+        if m.get("role") == "user":
+            return False
+        if (m.get("role") == "tool" and m.get("name") == nom
+                and (m.get("content") or "").startswith(resultat[:120])):
+            return True
+    return False
+
+
 def executer_outil(conv, tc, args, ws):
     """Exécute un tool_call (dict) et ajoute son résultat à la conversation."""
     nom = tc["function"]["name"]
@@ -929,6 +1065,10 @@ def executer_outil(conv, tc, args, ws):
         resultat = f"Erreur d'arguments : {e}"
     if len(resultat) > 30000:
         resultat = resultat[:30000] + "\n[... résultat tronqué ...]"
+    if resultat.startswith("Erreur") and deja_echoue_pareil(conv, nom, resultat):
+        resultat += ("\n\n⚠️ Cet appel a déjà échoué avec exactement la même erreur. "
+                     "Ne le répète pas à l'identique : relis le fichier concerné "
+                     "(lire_fichier) et change d'approche.")
     conv["messages"].append({
         "role": "tool",
         "name": nom,
@@ -1000,12 +1140,24 @@ def continuer(conv):
     except Exception as e:
         en_attente = None
         sauvegarder_conv(conv)
-        yield {"type": "erreur", "message": str(e)}
+        message = str(e)
+        # Modèle retiré du catalogue du fournisseur (chaque conversation
+        # mémorise son modèle : une vieille conversation peut pointer vers
+        # un modèle qui n'existe plus).
+        if any(x in message for x in ("decommission", "model_not_found",
+                                      "does not exist", "NOT_FOUND")):
+            message = (f"Le modèle « {conv.get('modele')} » n'est plus proposé par son "
+                       "fournisseur. Choisis un autre modèle dans le menu en haut, "
+                       "puis renvoie ton message.\n\n(Détail : " + message + ")")
+        yield {"type": "erreur", "message": message}
 
 
 def reponse_ndjson(generateur):
     def encoder():
         for evenement in generateur:
+            # Une génération en cours compte comme de l'activité : l'arrêt
+            # automatique ne doit pas couper l'agent en plein travail.
+            DERNIER_SIGNE_VIE["t"] = time.time()
             yield json.dumps(evenement, ensure_ascii=False) + "\n"
     return Response(encoder(), mimetype="application/x-ndjson",
                     headers={"X-Accel-Buffering": "no", "Cache-Control": "no-cache"})
@@ -1128,10 +1280,17 @@ def lister_modeles_compat(api_key, url_models, candidats, exclus, prefixe, etiqu
     if not api_key:
         return []
     try:
+        # User-Agent de navigateur : Groq (Cloudflare) refuse « Python-urllib »
+        # avec un 403, ce qui faisait retomber sur la liste codée en dur.
         requete = urllib.request.Request(
-            url_models, headers={"Authorization": f"Bearer {api_key}"})
+            url_models, headers={"Authorization": f"Bearer {api_key}",
+                                 "User-Agent": "Mozilla/5.0 (Cortex)"})
         with urllib.request.urlopen(requete, timeout=4) as r:
-            dispos = {(m.get("id") or "").split("/")[-1] for m in json.load(r).get("data", [])}
+            # Gemini préfixe ses ids par « models/ » (à retirer) ; Groq utilise
+            # des espaces de noms (« openai/gpt-oss-120b ») qui font PARTIE de
+            # l'id et doivent être conservés tels quels.
+            dispos = {(m.get("id") or "").removeprefix("models/")
+                      for m in json.load(r).get("data", [])}
     except Exception:
         # Clé présente mais liste inaccessible : proposer les candidats connus.
         return [{"id": prefixe + ":" + mid, "nom": nom} for mid, nom in candidats]
@@ -1305,6 +1464,13 @@ def api_qr():
         return Response(buf.getvalue(), mimetype="image/svg+xml")
     except Exception as e:
         return jsonify({"erreur": str(e)}), 500
+
+
+@app.route("/api/ping")
+def api_ping():
+    """Signe de vie envoyé par l'interface toutes les 25 s. La simple
+    réception (before_request) suffit à repousser l'arrêt automatique."""
+    return jsonify({"ok": True})
 
 
 @app.route("/api/quitter", methods=["POST"])
@@ -1521,9 +1687,44 @@ def trop_gros(_):
 
 migrer_ancien_historique()
 
+
+def instance_deja_active(port):
+    """Vrai si un serveur Cortex répond déjà sur ce port. Sans ce verrou,
+    chaque double-clic sur l'icône empile un serveur de plus : Windows
+    répartit alors les requêtes au hasard entre les instances (SO_REUSEADDR),
+    les confirmations se perdent et l'agent semble tourner en rond."""
+    try:
+        with urllib.request.urlopen(f"http://127.0.0.1:{port}/sw.js", timeout=2):
+            return True
+    except Exception:
+        return False
+
+
+def veilleur_arret_auto():
+    """Éteint le serveur quand plus personne ne l'utilise : l'interface envoie
+    un signe de vie toutes les 25 s tant qu'un onglet est ouvert. Onglet
+    fermé, plus de signe de vie -> extinction après ARRET_AUTO_MIN minutes
+    (jamais pendant une génération ou une confirmation en attente)."""
+    while True:
+        time.sleep(30)
+        if en_attente is not None:
+            continue
+        if time.time() - DERNIER_SIGNE_VIE["t"] > ARRET_AUTO_MIN * 60:
+            print("[arrêt auto] Plus d'onglet ouvert depuis "
+                  f"{ARRET_AUTO_MIN:g} min : extinction.")
+            os._exit(0)
+
+
 if __name__ == "__main__":
     hote = os.getenv("HOST", "127.0.0.1")
     port = int(os.getenv("PORT", "5000"))
+    if instance_deja_active(port):
+        print(f"Cortex tourne déjà sur le port {port} : on n'en relance pas un deuxième.")
+        print(f"Ouvre simplement http://127.0.0.1:{port} dans le navigateur.")
+        sys.exit(0)
+    if ARRET_AUTO_MIN > 0:
+        import threading
+        threading.Thread(target=veilleur_arret_auto, daemon=True).start()
     debug = os.getenv("DEBUG", "").lower() in ("1", "true", "on", "oui")
     print("=" * 58)
     print("  Cortex — serveur démarré")
