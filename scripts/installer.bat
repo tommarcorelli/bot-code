@@ -1,7 +1,7 @@
 @echo off
 chcp 65001 >nul
 title Cortex - Installation
-cd /d "%~dp0"
+cd /d "%~dp0.."
 echo ================================================
 echo   Installation de Cortex
 echo ================================================

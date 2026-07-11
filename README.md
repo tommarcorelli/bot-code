@@ -12,7 +12,7 @@ installable comme une appli (PWA), y compris sur le téléphone.
 
 ## Installation (une seule fois)
 
-Double-clique sur **`installer.bat`**. Il crée l'environnement Python, installe
+Double-clique sur **`scripts\installer.bat`**. Il crée l'environnement Python, installe
 les dépendances et pose **une** icône **Cortex** sur ton bureau.
 
 Puis copie `.env.example` en `.env` et mets au moins ta clé Mistral :
@@ -45,7 +45,7 @@ de l'interface.
 | Je veux… | Je lance… |
 |---|---|
 | L'utiliser (PC et/ou téléphone) | Icône **« Cortex »** |
-| Voir la console / les logs | `lancer.bat` |
+| Voir la console / les logs | `scripts\lancer.bat` |
 
 ---
 
@@ -65,7 +65,7 @@ sur le **même Wi-Fi** (l'agent travaille sur *tes fichiers*, qui sont sur le PC
 Le lien contient ta **clé d'accès** : garde-le pour toi.
 
 > **Le téléphone ne se connecte pas ?** Lance une fois
-> `Ouvrir-acces-telephone.bat` (il demande les droits admin) : il ouvre le port
+> `scripts\Ouvrir-acces-telephone.bat` (il demande les droits admin) : il ouvre le port
 > 5000 dans le pare-feu Windows et retire les règles qui bloquent `pythonw`.
 > Vérifie aussi que le téléphone est bien sur le **même Wi-Fi** que le PC.
 >
@@ -127,10 +127,9 @@ protégée par un **jeton d'accès** généré au premier lancement (stocké dan
 ## Architecture
 
 ```
-bot-code/
+Cortex/
 ├── app.py              serveur Flask : routes, tours de modèle, outils, sécurité
 ├── tools_web.py        outils fichiers (confinés au dossier de travail) + tests couverts
-├── agent_mistral.py    version CLI minimale (démo pédagogique, hors interface web)
 ├── templates/index.html
 ├── static/
 │   ├── script.js       front (chat, streaming, explorateur, PWA, jeton)
@@ -139,9 +138,16 @@ bot-code/
 │   ├── manifest.json   manifeste PWA (+ icônes maskables)
 │   └── icon-*.png
 ├── tests/              py -m unittest discover -s tests
-├── installer.bat       installation + icône bureau
-├── Demarrer-agent.vbs  lancement sans console (PC + accès téléphone)
-├── lancer.bat          lancement avec console (logs)
+├── scripts/            lanceurs Windows (double-clic)
+│   ├── installer.bat            installation + icône bureau
+│   ├── Demarrer-agent.vbs       lancement sans console (PC + accès téléphone)
+│   ├── lancer.bat              lancement avec console (logs)
+│   ├── Ouvrir-acces-telephone.bat  ouvre le port 5000 dans le pare-feu
+│   ├── Installer-raccourci.ps1  crée le raccourci bureau
+│   └── agent.ico
+├── archive/            code hérité, hors interface web
+│   ├── agent_mistral.py  version CLI minimale (démo pédagogique)
+│   └── tools.py          outils de l'ancienne version CLI
 └── requirements.txt
 ```
 

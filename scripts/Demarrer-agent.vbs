@@ -5,14 +5,15 @@
 Option Explicit
 Dim fso, sh, dossier, python, app
 Set fso = CreateObject("Scripting.FileSystemObject")
-dossier = fso.GetParentFolderName(WScript.ScriptFullName)
+' Le script vit dans scripts\ : on remonte d'un niveau vers la racine du projet.
+dossier = fso.GetParentFolderName(fso.GetParentFolderName(WScript.ScriptFullName))
 python = dossier & "\venv\Scripts\pythonw.exe"
 app = dossier & "\app.py"
 Set sh = CreateObject("WScript.Shell")
 sh.CurrentDirectory = dossier
 If Not fso.FileExists(python) Then
   MsgBox "Environnement Python introuvable." & vbCrLf & _
-         "Lance installer.bat une premiere fois pour tout preparer.", _
+         "Lance scripts\installer.bat une premiere fois pour tout preparer.", _
          vbExclamation, "Cortex"
   WScript.Quit
 End If

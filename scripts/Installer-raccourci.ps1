@@ -1,5 +1,6 @@
 # Installer-raccourci.ps1 — cree les raccourcis de l'Agent de Code sur le bureau.
-$dossier = Split-Path -Parent $MyInvocation.MyCommand.Path
+$dossier = Split-Path -Parent $MyInvocation.MyCommand.Path   # ...\scripts
+$racine  = Split-Path -Parent $dossier                       # racine du projet
 $icone   = Join-Path $dossier "agent.ico"
 $bureau  = [Environment]::GetFolderPath("Desktop")
 $ws      = New-Object -ComObject WScript.Shell
@@ -8,7 +9,7 @@ function Nouveau-Raccourci($nom, $cibleVbs, $desc) {
   $lien = $ws.CreateShortcut((Join-Path $bureau "$nom.lnk"))
   $lien.TargetPath       = "wscript.exe"
   $lien.Arguments        = '"' + (Join-Path $dossier $cibleVbs) + '"'
-  $lien.WorkingDirectory = $dossier
+  $lien.WorkingDirectory = $racine
   $lien.IconLocation     = $icone
   $lien.Description       = $desc
   $lien.Save()

@@ -1,7 +1,7 @@
 @echo off
 chcp 65001 >nul
 title Cortex - Agent de Code
-cd /d "%~dp0"
+cd /d "%~dp0.."
 REM Serveur local uniquement. Pour l'acces telephone : set HOST=0.0.0.0
 echo ================================================
 echo   Demarrage de Cortex...
